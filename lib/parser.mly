@@ -44,6 +44,7 @@ open Ast
 %token FIELDSEP
 %token THIS
 %token MSGSENDER
+%token MSGVALUE
 %token BALANCE
 %token TRANSFER
 %token COLON
@@ -61,9 +62,10 @@ open Ast
 %left OR
 %left AND
 %nonassoc NOT
-%left EQ LEQ
+%left EQ NEQ LEQ GEQ LE GE
 %left PLUS MINUS
 %left MUL
+
 
 %left CMDSEP (* bart: check *)
 %nonassoc ELSE
@@ -104,6 +106,7 @@ expr:
   | s = STRING { AddrConst(s) }
   | THIS { This }
   | MSGSENDER { Var("msg.sender") }
+  | MSGVALUE { Var("msg.value") }
   | e=expr; FIELDSEP; BALANCE { BalanceOf(e) }
   | TRUE { True }
   | FALSE { False }

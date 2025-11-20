@@ -40,6 +40,7 @@ rule read_token =
   | "." { FIELDSEP }
   | "this" { THIS }
   | "msg.sender" { MSGSENDER }
+  | "msg.value" { MSGVALUE }
   | "balance" { BALANCE }
   | "transfer" { TRANSFER }
   | ":" { COLON }

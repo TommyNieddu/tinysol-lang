@@ -23,10 +23,7 @@ type sysstate = {
 type exec_state = 
   | St of sysstate 
   | Cmd of cmd * sysstate * addr
-
-let sysstate_of_exec_sysstate = function
-  St st -> st
-| _ -> failwith "systate_of_exec_sysstate"
+  | Reverted
 
 let rec last_sysstate = function
     [] -> failwith "last on empty list"

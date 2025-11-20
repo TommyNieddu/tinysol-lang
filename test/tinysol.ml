@@ -52,6 +52,7 @@ let test_trace_cmd (c,n_steps,var,exp_val) =
   |> fun t -> match t with
   | St st -> lookup_var "0xCAFE" var st = exp_val
   | Cmd(_,st,_) -> lookup_var "0xCAFE" var st = exp_val
+  | Reverted -> false
 
 let%test "test_trace_cmd_1" = test_trace_cmd
   ("{ int x; x=51; skip; }", 2, "x", Int 51)  
@@ -100,16 +101,17 @@ let%test "test_trace_cmd_12" = test_trace_cmd
  - exp_vals: a list of expected values for the variables vars)
  ********************************************************************************)
 
-let test_exec_tx (src: string) (txl: string list) (vars : ide list) (exp_vals : exprval list) =
+let test_exec_tx (src: string) (txl: string list) (els : string list) =
   let txl = List.map parse_transaction txl in
   init_sysstate
   |> faucet "0xA" 100
-  |> deploy_contract { txsender="0xA"; txto="0xC1"; txfun="constructor"; txargs=[]; txvalue=0; } src 
+  |> faucet "0xB" 100
+  |> deploy_contract { txsender="0xA"; txto="0xC"; txfun="constructor"; txargs=[]; txvalue=0; } src 
   |> exec_tx_list 1000 txl 
-  |> fun st -> List.map (fun x -> lookup_var "0xC1" x st) vars 
-  |> fun vl -> vl = exp_vals
+  |> fun st -> List.map (fun x -> x |> parse_expr |> eval_expr st "0xC") els 
+  |> List.for_all (fun v -> v = Bool true)
 
-let c1 = "contract C1 {
+let c1 = "contract C {
     int x;
     bool b;
   
@@ -121,18 +123,77 @@ let c1 = "contract C1 {
 
 let%test "test_exec_tx_1" = test_exec_tx
   c1
-  ["0xA:0xC1.g()"] 
-  ["x"; "b"]
-  [Int 0; Bool true]  
+  ["0xA:0xC.g()"] 
+  ["x==0"; "b"]
 
 let%test "test_exec_tx_2" = test_exec_tx
   c1
-  ["0xA:0xC1.g()"; "0xA:0xC1.g()"] 
-  ["x"; "b"]
-  [Int 1; Bool true]
+  ["0xA:0xC.g()"; "0xA:0xC.g()"] 
+  ["x==1"; "b"]
 
 let%test "test_exec_tx_3" = test_exec_tx
   c1
-  ["0xA:0xC1.g()"; "0xA:0xC1.g()"; "0xA:0xC1.g()"] 
-  ["x"; "b"]
-  [Int 2; Bool true]
+  ["0xA:0xC.g()"; "0xA:0xC.g()"; "0xA:0xC.g()"] 
+  ["x==2"; "b"]
+
+
+let c2 = "contract C {
+    int x;
+    address owner;
+  
+    constructor() { owner = msg.sender; }
+
+    function f() public { 
+        require(msg.sender == owner);
+        x = x+1;
+    }
+}"
+
+let%test "test_exec_tx_4" = test_exec_tx
+  c2
+  ["0xA:0xC.f()"] 
+  ["x==1"; "owner==\"0xA\""]  
+
+let%test "test_exec_tx_5" = test_exec_tx
+  c2
+  ["0xA:0xC.f()"; "0xB:0xC.f()"; "0xA:0xC.f()"] 
+  ["x==2"; "owner==\"0xA\""]
+
+let c3 = "contract C {
+    int x;
+  
+    function f() public payable { 
+        require(msg.value > 0);
+        x = x+1;
+    }
+}"
+
+let%test "test_exec_tx_6" = test_exec_tx
+  c3
+  ["0xA:0xC.f()"] 
+  ["x==0"; "this.balance==0"]
+
+let%test "test_exec_tx_7" = test_exec_tx
+  c3
+  ["0xA:0xC.f{value : 3}()"] 
+  ["x==1"; "this.balance==3"]
+
+
+let c4 = "contract C {
+    int x;
+  
+    function f() public payable { 
+        x = x+1;
+        require(x > 0 && msg.value > 0);
+    }
+}"
+
+let%test "test_exec_tx_7" = test_exec_tx
+  c4
+  ["0xA:0xC.f()"] 
+  ["x==0"; "this.balance==0"]
+
+let%test "test_exec_tx_8" = test_exec_tx
+  c4
+  ["0xA:0xC.f{value : 3}()"] 
+  ["x==1"; "this.balance==3"]

@@ -122,6 +122,7 @@ let eval_var_decls (vdl : var_decl list) (e : env): env =
 
 let rec trace1_cmd = function
     St _ -> raise NoRuleApplies
+  | Reverted -> Reverted
   | Cmd(c,st,a) -> (match c with
     | Skip -> St st
     | Assign(x,e) -> (
@@ -132,7 +133,8 @@ let rec trace1_cmd = function
         with _ -> 
           St (update_storage st a x (eval_expr st a e)))
     | Seq(c1,c2) -> (match trace1_cmd (Cmd(c1,st,a)) with
-          St st1 -> Cmd(c2,st1,a)
+        | St st1 -> Cmd(c2,st1,a)
+        | Reverted -> Reverted
         | Cmd(c1',st1,a) -> Cmd(Seq(c1',c2),st1,a))
     | If(e,c1,c2) -> (match eval_expr st a e with
           Bool true -> Cmd(c1,st,a)
@@ -152,7 +154,7 @@ let rec trace1_cmd = function
           St { st with accounts = st.accounts |> bind rcv rcv_state |> bind a sender_state; active = rcv::st.active }
     | Req(e) -> 
         if eval_expr st a e = Bool true then St st 
-        else failwith "TODO: revert" 
+        else Reverted 
     | Call(_,_) -> failwith "TODO"
     | ExecCall _  -> failwith "TODO"
     | Block(vdl,c) ->
@@ -161,6 +163,7 @@ let rec trace1_cmd = function
         Cmd(ExecBlock c, { st with stackenv = e'::st.stackenv} , a)
     | ExecBlock(c) -> (match trace1_cmd (Cmd(c,st,a)) with
         | St st -> St (popenv st)
+        | Reverted -> Reverted
         | Cmd(c1',st1,a') -> Cmd(ExecBlock(c1'),st1,a'))
     )
 (* (match (topenv st f,eval_expr st e) with
@@ -247,16 +250,19 @@ let find_fun (Contract(_,_,fdl)) (f : ide) : fun_decl option =
   fdl
 
 let bind_fargs_aargs (xl : var_decl list) (vl : exprval list) : env =
-   List.fold_left2 
-   (fun acc x_decl v -> match (x_decl,v) with 
-    | (IntVar x, Int _)
-    | (BoolVar x, Bool _) 
-    | (AddrVar x, Addr _) -> bind x v acc
-    | (UintVar x, Int n) when n>=0 -> bind x v acc
-    | _ -> failwith "bind_fargs_aargs") 
-   botenv 
-   xl 
-   vl
+  if List.length xl <> List.length vl then
+    failwith "exec_tx: length mismatch between formal and actual arguments"
+  else 
+  List.fold_left2 
+  (fun acc x_decl v -> match (x_decl,v) with 
+   | (IntVar x, Int _)
+   | (BoolVar x, Bool _) 
+   | (AddrVar x, Addr _) -> bind x v acc
+   | (UintVar x, Int n) when n>=0 -> bind x v acc
+   | _ -> failwith "exec_tx: type mismatch between formal and actual arguments") 
+  botenv 
+  xl 
+  vl
 
 let exec_tx (n_steps : int) (tx: transaction) (st : sysstate) : sysstate =
   if tx.txvalue < 0 then
@@ -317,9 +323,10 @@ let exec_tx (n_steps : int) (tx: transaction) (st : sysstate) : sysstate =
                       |> bind tx.txto to_state; 
                     stackenv = e' :: st.stackenv;
                     active = if deploy then tx.txto :: st.active else st.active } in
-        exec_cmd n_steps c tx.txto st'
-        |> sysstate_of_exec_sysstate
-        |> popenv
+        match exec_cmd n_steps c tx.txto st' with
+          St st'' -> st'' |> popenv
+        | Reverted -> st  (* if the command reverts, the new state is st *)
+        | _ -> failwith "exec_tx: execution of command not terminated (not enough gas?)"
     ) 
 
 let exec_tx_list (n_steps : int) (txl : transaction list) (st : sysstate) = 

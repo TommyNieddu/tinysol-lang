@@ -1,13 +1,16 @@
 //SPDX-License-Identifier: GPL-3.0-only
 
 contract C1 {
+    address owner;
     int x;
     bool b;
 
-    constructor() payable {}
+    constructor() payable { 
+        owner = msg.sender;
+    }
 
     function f1() public payable { 
-        if (b) x = x+1;
+        if (b && msg.sender == owner) x = x+1;
         else b=true;
     }
 

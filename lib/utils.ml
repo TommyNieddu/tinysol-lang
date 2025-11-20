@@ -239,6 +239,7 @@ let string_of_sysstate (evl : ide list) (st : sysstate) =
 
 let string_of_execstate evl = function
   | St st -> string_of_sysstate evl st
+  | Reverted -> "reverted"
   | Cmd (c,st,a) -> 
       "cmd: " ^ (string_of_cmd c) ^ "\n" ^ 
       (string_of_sysstate evl st) ^ "," ^ a 
@@ -246,6 +247,7 @@ let string_of_execstate evl = function
 let string_of_trace stl = match stl with
   [] -> ""
 | St _::_ -> ""
+| Reverted :: _ -> "reverted"
 | Cmd (c,_,_)::_ -> let evl = vars_of_cmd c in  
   let rec helper stl = (match stl with
     [] -> ""
