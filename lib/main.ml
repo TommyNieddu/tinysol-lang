@@ -101,7 +101,11 @@ let rec eval_expr (st : sysstate) (a : addr) = function
   | Ge(e1,e2) -> (match (eval_expr st a e1,eval_expr st a e2)  with
         (Int n1,Int n2) -> Bool(n1 > n2)
       | _ -> raise (TypeError "Ge")
-    )          
+    )
+  | IfE(e1,e2,e3) -> (match (eval_expr st a e1,eval_expr st a e2, eval_expr st a e3)  with
+        (Bool b,v2,v3) -> if b then v2 else v3
+      | _ -> raise (TypeError "IfE")
+    )
   | IntCast(e) -> (match eval_expr st a e  with
       | Int n -> Int n
       | _ -> raise (TypeError "IntCast")

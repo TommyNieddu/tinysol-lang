@@ -5,22 +5,22 @@ open Ast
  * to have a smoother treatment of int and uint types 
  *)
 type exprtype = 
+  | BoolConstET of bool
   | BoolET
+  | IntConstET of int
   | IntET
-  | IntConstET
   | UintET
-  | UintConstET
   | AddrET of bool
   | MapET of exprtype * exprtype
 
 let rec string_of_exprtype = function
-  | BoolET      -> "bool"
-  | IntET       -> "int"
-  | IntConstET  -> "int const"
-  | UintET      -> "uint"
-  | UintConstET -> "uint const"
-  | AddrET p    -> "address" ^ (if p then " payable" else "")
-  | MapET(t1,t2) -> string_of_exprtype t1 ^ " => " ^ string_of_exprtype t2
+  | BoolConstET b   -> "bool " ^ (if b then "true" else "false")
+  | BoolET          -> "bool"
+  | IntConstET n    -> "int " ^ string_of_int n
+  | IntET           -> "int"
+  | UintET          -> "uint"
+  | AddrET p        -> "address" ^ (if p then " payable" else "")
+  | MapET(t1,t2)    -> string_of_exprtype t1 ^ " => " ^ string_of_exprtype t2
 
 (* TypeError(expression, inferred type, expected type) *)
 exception TypeError of expr * exprtype * exprtype
@@ -66,20 +66,20 @@ let no_dup_fun_decls vdl =
   |> fun res -> match res with None -> true | Some x -> raise (MultipleDecl x)  
 
 let subtype t0 t1 = match t1 with
-  | UintConstET -> t0 = t1
-  | UintET -> t0 = UintConstET || t0 = t1
-  | IntConstET -> t0 = UintConstET || t0 = t1
-  | IntET -> t0 = UintConstET || t0 == IntConstET || t0 = t1 (* uint is not convertible to int *)
+  | BoolConstET _ -> (match t0 with BoolConstET _ -> true | _ -> false) 
+  | BoolET -> (match t0 with BoolConstET _ | BoolET -> true | _ -> false) 
+  | IntConstET _ -> (match t0 with IntConstET _ -> true | _ -> false)
+  | UintET -> (match t0 with IntConstET n when n>=0 -> true | UintET -> true | _ -> false)
+  | IntET -> (match t0 with IntConstET _ | IntET -> true | _ -> false) (* uint is not convertible to int *)
   | _ -> t0 = t1
 
 let rec typecheck_expr (vdl : var_decl list) = function
-    True -> BoolET
-  | False -> BoolET
-  | IntConst n when n>=0 -> UintConstET
-  | IntConst _ -> IntConstET
+    True -> BoolConstET true
+  | False -> BoolConstET false
+  | IntConst n -> IntConstET n
   | AddrConst _ -> AddrET(false)
   | This -> AddrET(false) (* TODO: make more coherent with Solidity *)
-  | BlockNum -> UintConstET
+  | BlockNum -> UintET
   | Var x -> (match lookup_type x vdl with
     | Some t -> t
     | None -> raise (UndeclaredVar x))
@@ -92,47 +92,95 @@ let rec typecheck_expr (vdl : var_decl list) = function
         AddrET(_) -> UintET
       | _ as t -> raise (TypeError (e,t,AddrET(false))))
   | Not(e) -> (match typecheck_expr vdl e with
-        BoolET -> BoolET
+      | BoolConstET b -> BoolConstET (not b)
+      | BoolET -> BoolET
       | _ as t -> raise (TypeError (e,t,BoolET)))
-  | And(e1,e2) 
+  | And(e1,e2) -> 
+    (match (typecheck_expr vdl e1,typecheck_expr vdl e2) with
+     | (BoolConstET false,t2) when subtype t2 BoolET -> BoolConstET false
+     | (t1,BoolConstET false) when subtype t1 BoolET -> BoolConstET false
+     | (t1,t2) when subtype t1 BoolET && subtype t2 BoolET -> BoolET
+     | (t,_) when not (subtype t BoolET) -> raise (TypeError (e1,t,BoolET))
+     | (_,t) -> raise (TypeError (e2,t,BoolET)))
   | Or(e1,e2) ->
     (match (typecheck_expr vdl e1,typecheck_expr vdl e2) with
-       (BoolET,BoolET) -> BoolET
-     | (t,_) when t<>BoolET -> raise (TypeError (e1,t,BoolET))
+     | (BoolConstET true,t2) when subtype t2 BoolET -> BoolConstET true
+     | (t1,BoolConstET true) when subtype t1 BoolET -> BoolConstET true
+     | (t1,t2) when subtype t1 BoolET && subtype t2 BoolET -> BoolET
+     | (t,_) when not (subtype t BoolET) -> raise (TypeError (e1,t,BoolET))
      | (_,t) -> raise (TypeError (e2,t,BoolET)))
-  | Add(e1,e2)
-  | Mul(e1,e2) ->
+  | Add(e1,e2) ->
     (match (typecheck_expr vdl e1,typecheck_expr vdl e2) with
-     | (UintConstET,UintConstET) -> UintConstET
-     | (t1,t2) when subtype t1 UintET && subtype t2 UintET -> UintET
-     | (t1,t2) when subtype t1 IntConstET && subtype t2 IntConstET -> IntConstET
+     | (IntConstET n1,IntConstET n2) -> IntConstET (n1+n2)
      | (t1,t2) when subtype t1 UintET && subtype t2 UintET -> UintET
      | (t1,t2) when subtype t1 IntET && subtype t2 IntET -> IntET
-     | (t1,_) when t1<>IntET -> raise (TypeError (e1,t1,IntET))
+     | (t1,_) when not (subtype t1 IntET) -> raise (TypeError (e1,t1,IntET))
+     | (_,t2) -> raise (TypeError (e2,t2,IntET)))
+  | Mul(e1,e2) ->
+    (match (typecheck_expr vdl e1,typecheck_expr vdl e2) with
+     | (IntConstET n1,IntConstET n2) -> IntConstET (n1*n2)
+     | (t1,t2) when subtype t1 UintET && subtype t2 UintET -> UintET
+     | (t1,t2) when subtype t1 IntET && subtype t2 IntET -> IntET
+     | (t1,_) when not (subtype t1 IntET) -> raise (TypeError (e1,t1,IntET))
      | (_,t2) -> raise (TypeError (e2,t2,IntET)))
   | Sub(e1,e2) ->
     (match (typecheck_expr vdl e1,typecheck_expr vdl e2) with
-     | (t1,t2) when subtype t1 IntConstET && subtype t2 IntConstET -> IntConstET
+     | (IntConstET n1,IntConstET n2) -> IntConstET (n1-n2)
      | (t1,t2) when subtype t1 UintET && subtype t2 UintET -> UintET
      | (t1,t2) when subtype t1 IntET && subtype t2 IntET -> IntET
-     | (t1,_) when t1<>IntET -> raise (TypeError (e1,t1,IntET))
+     | (t1,_) when not (subtype t1 IntET) -> raise (TypeError (e1,t1,IntET))
      | (_,t2) -> raise (TypeError (e2,t2,IntET)))
-  | Eq(e1,e2)
-  | Neq(e1,e2) ->
+  | Eq(e1,e2) ->
     (match (typecheck_expr vdl e1,typecheck_expr vdl e2) with
-       (t1,t2) when t1=t2-> BoolET
+     | (IntConstET n1,IntConstET n2) -> BoolConstET (n1 = n2)
+     | (t1,t2) when t1=t2-> BoolET
      | (t1,t2) when subtype t1 UintET && subtype t2 UintET -> BoolET
      | (t1,t2) when subtype t1 IntET && subtype t2 IntET -> BoolET
      | (t1,t2) -> raise (TypeError (e2,t2,t1)))
-  | Leq(e1,e2)
-  | Le(e1,e2)
-  | Geq(e1,e2)
-  | Ge(e1,e2) ->
+  | Neq(e1,e2) ->
     (match (typecheck_expr vdl e1,typecheck_expr vdl e2) with
+     | (IntConstET n1,IntConstET n2) -> BoolConstET (n1 <> n2)
+     | (t1,t2) when t1=t2-> BoolET
+     | (t1,t2) when subtype t1 UintET && subtype t2 UintET -> BoolET
+     | (t1,t2) when subtype t1 IntET && subtype t2 IntET -> BoolET
+     | (t1,t2) -> raise (TypeError (e2,t2,t1)))
+  | Leq(e1,e2) ->
+    (match (typecheck_expr vdl e1,typecheck_expr vdl e2) with
+     | (IntConstET n1,IntConstET n2) -> BoolConstET (n1 <= n2)
      | (t1,t2) when subtype t1 UintET && subtype t2 UintET -> BoolET
      | (t1,t2) when subtype t1 IntET && subtype t2 IntET -> BoolET
      | (t1,IntET) -> raise (TypeError (e1,t1,IntET))
      | (_,t2) -> raise (TypeError (e2,t2,IntET)))
+  | Le(e1,e2) ->
+    (match (typecheck_expr vdl e1,typecheck_expr vdl e2) with
+     | (IntConstET n1,IntConstET n2) -> BoolConstET (n1 < n2)
+     | (t1,t2) when subtype t1 UintET && subtype t2 UintET -> BoolET
+     | (t1,t2) when subtype t1 IntET && subtype t2 IntET -> BoolET
+     | (t1,IntET) -> raise (TypeError (e1,t1,IntET))
+     | (_,t2) -> raise (TypeError (e2,t2,IntET)))
+  | Geq(e1,e2) ->
+    (match (typecheck_expr vdl e1,typecheck_expr vdl e2) with
+     | (IntConstET n1,IntConstET n2) -> BoolConstET (n1 >= n2)
+     | (t1,t2) when subtype t1 UintET && subtype t2 UintET -> BoolET
+     | (t1,t2) when subtype t1 IntET && subtype t2 IntET -> BoolET
+     | (t1,IntET) -> raise (TypeError (e1,t1,IntET))
+     | (_,t2) -> raise (TypeError (e2,t2,IntET)))
+  | Ge(e1,e2) ->
+    (match (typecheck_expr vdl e1,typecheck_expr vdl e2) with
+     | (IntConstET n1,IntConstET n2) -> BoolConstET (n1 > n2)
+     | (t1,t2) when subtype t1 UintET && subtype t2 UintET -> BoolET
+     | (t1,t2) when subtype t1 IntET && subtype t2 IntET -> BoolET
+     | (t1,IntET) -> raise (TypeError (e1,t1,IntET))
+     | (_,t2) -> raise (TypeError (e2,t2,IntET)))
+  | IfE(e1,e2,e3) ->
+    (match (typecheck_expr vdl e1,typecheck_expr vdl e2, typecheck_expr vdl e3) with
+     | (BoolConstET true,t2,_) -> t2
+     | (BoolConstET false,_,t3) -> t3
+     | (BoolET,t2,t3) when subtype t2 t3 -> t3
+     | (BoolET,t2,t3) when subtype t3 t2 -> t2
+     | (BoolET,t2,t3) -> raise (TypeError (e3,t3,t2))
+     | (t1,_,_) -> raise (TypeError (e1,t1,BoolET))
+    )
   | IntCast(e) -> (match typecheck_expr vdl e with
       | IntET | UintET -> IntET
       | _ as t -> raise (TypeError (e,t,IntET)))
@@ -145,7 +193,7 @@ let rec typecheck_expr (vdl : var_decl list) = function
       | _ as t -> raise (TypeError (e,t,IntET))) 
   | PayableCast(e) -> (match typecheck_expr vdl e with
       | AddrET(_) -> AddrET(true)
-      | UintConstET -> AddrET(false)
+      | IntConstET 0 -> AddrET(false)
       | _ as t -> raise (TypeError (e,t,IntET))) 
 
 let is_immutable (x : ide) (vdl : var_decls) = 
@@ -186,9 +234,11 @@ let rec typecheck_cmd (is_constr : bool) (vdl : var_decl list) = function
         typecheck_cmd is_constr vdl c1 && 
         typecheck_cmd is_constr vdl c2
     | If(e,c1,c2) ->
-        let te = typecheck_expr vdl e in
-        if te = BoolET then typecheck_cmd is_constr vdl c1 && typecheck_cmd is_constr vdl c2
-        else raise (TypeError (e,te,BoolET))
+        let te = typecheck_expr vdl e in (match te with
+          | BoolConstET true -> typecheck_cmd is_constr vdl c1
+          | BoolConstET false -> typecheck_cmd is_constr vdl c2
+          | BoolET -> typecheck_cmd is_constr vdl c1 && typecheck_cmd is_constr vdl c2
+          | _ -> raise (TypeError (e,te,BoolET)))
     | Send(ercv,eamt) -> 
         typecheck_expr vdl ercv = AddrET(true)  (* can only send to payable addresses *) 
         &&

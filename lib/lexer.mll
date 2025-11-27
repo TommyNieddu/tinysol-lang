@@ -46,6 +46,7 @@ rule read_token =
   | "msg.value" { MSGVALUE }
   | "balance" { BALANCE }
   | "transfer" { TRANSFER }
+  | "?" { QMARK }
   | ":" { COLON }
   | "value" { VALUE }
   | "contract" { CONTRACT }

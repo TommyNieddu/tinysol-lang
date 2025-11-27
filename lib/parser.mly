@@ -54,6 +54,7 @@ open Ast
 %token BALANCE
 %token TRANSFER
 %token COLON
+%token QMARK
 %token VALUE
 %token ARGSEP
 %token PUBLIC
@@ -134,6 +135,7 @@ expr:
   | e1=expr; GEQ; e2=expr { Geq(e1,e2) }
   | e1=expr; GE; e2=expr { Ge(e1,e2) }
   | e1=expr; LSQUARE; e2=expr; RSQUARE { MapR(e1,e2) }
+  | LPAREN; e1 = expr; RPAREN; QMARK; e2 = expr; COLON; e3 = expr { IfE(e1,e2,e3) }
   | INT; LPAREN; e=expr; RPAREN; { IntCast(e) }
   | UINT; LPAREN; e=expr; RPAREN; { UintCast(e) }
   | ADDR; LPAREN; e=expr; RPAREN; { AddrCast(e) }

@@ -27,7 +27,8 @@ type expr =
   | Leq of expr * expr
   | Le of expr * expr           
   | Geq of expr * expr
-  | Ge of expr * expr           
+  | Ge of expr * expr
+  | IfE of expr * expr * expr           
   | IntCast of expr
   | UintCast of expr
   | AddrCast of expr

@@ -93,6 +93,7 @@ let rec vars_of_expr = function
   | Le(e1,e2)
   | Geq(e1,e2) 
   | Ge(e1,e2) -> union (vars_of_expr e1) (vars_of_expr e2)                    
+  | IfE(e1,e2,e3) -> union (vars_of_expr e1) (union (vars_of_expr e2) (vars_of_expr e3))
 
 and vars_of_cmd = function
     Skip -> []
@@ -149,6 +150,7 @@ let rec string_of_expr = function
   | Le(e1,e2) -> string_of_expr e1 ^ "<" ^ string_of_expr e2                    
   | Geq(e1,e2) -> string_of_expr e1 ^ ">=" ^ string_of_expr e2
   | Ge(e1,e2) -> string_of_expr e1 ^ ">" ^ string_of_expr e2
+  | IfE(e1,e2,e3) -> "(" ^ string_of_expr e1 ^ ")?" ^ string_of_expr e2 ^ ":" ^ string_of_expr e3
   | IntCast(e) -> "int(" ^ string_of_expr e ^ ")"
   | UintCast(e) -> "int(" ^ string_of_expr e ^ ")"
   | AddrCast(e) -> "address(" ^ string_of_expr e ^ ")"
