@@ -35,7 +35,9 @@ type expr =
   | PayableCast of expr
   | EnumOpt of ide * ide
   | EnumCast of ide * expr
-
+  | FunCall of expr * ide * expr * expr list
+  | ExecFunCall of cmd
+  
 (* commands *)
           
 and cmd =
@@ -46,11 +48,11 @@ and cmd =
   | If of expr * cmd * cmd
   | Send of expr * expr       (* send(e1,e2) transfers e2 wei to e1 *)
   | Req of expr               (* require(e) reverts if e is false *) 
-  | Call of ide * expr list
-  | ExecCall of cmd           (* Runtime only: c is the cmd being reduced *)
   | Block of var_decls * cmd
   | ExecBlock of cmd          (* Runtime only: c is the cmd being reduced *)
   | Decl of var_decl          (* Static-time only: Decl is converted into block*)
+  | ProcCall of expr * ide * expr * expr list
+  | Return of expr
 
 and base_type = 
   | IntBT           (* int *)
@@ -78,7 +80,7 @@ and visibility =
 
 and fun_decl =
   | Constr of var_decls * cmd * bool (* payable *)
-  | Proc of ide * var_decls * cmd * visibility * bool (* payable *)
+  | Proc of ide * var_decls * cmd * visibility * bool * (base_type option) 
 
 and var_decls = var_decl list
 

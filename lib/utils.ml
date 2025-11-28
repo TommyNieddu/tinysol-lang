@@ -96,6 +96,9 @@ let rec vars_of_expr = function
   | Ge(e1,e2) -> union (vars_of_expr e1) (vars_of_expr e2)                    
   | IfE(e1,e2,e3) -> union (vars_of_expr e1) (union (vars_of_expr e2) (vars_of_expr e3))
   | EnumCast(x,e) ->  union [x] (vars_of_expr e)
+  | FunCall(e_to,_,e_value,e_args) -> union (vars_of_expr e_to) (union (vars_of_expr e_value) 
+    (List.fold_left (fun acc ea -> union acc (vars_of_expr ea)) [] e_args))
+  | ExecFunCall(c) ->  vars_of_cmd c
 
 and vars_of_cmd = function
   | Skip -> []
@@ -105,12 +108,13 @@ and vars_of_cmd = function
   | Seq(c1,c2) -> union (vars_of_cmd c1) (vars_of_cmd c2)
   | If(e,c1,c2) -> union (vars_of_expr e) (union (vars_of_cmd c1) (vars_of_cmd c2))
   | Send(e1,e2) -> union (vars_of_expr e1) (vars_of_expr e2)
-  | Req(e) -> vars_of_expr e                    
-  | Call(f,el) -> union [f] (List.fold_left (fun acc e -> union acc (vars_of_expr e)) [] el)
-  | ExecCall(c) -> vars_of_cmd c
+  | Req(e) -> vars_of_expr e    
+  | Return(e) -> vars_of_expr e               
   | Block(_,c) -> vars_of_cmd c
   | ExecBlock(c) -> vars_of_cmd c
-
+  | ProcCall(e_to,_,e_value,e_args) -> union (vars_of_expr e_to) (union (vars_of_expr e_value) 
+    (List.fold_left (fun acc ea -> union acc (vars_of_expr ea)) [] e_args))
+  
 let vars_of_contract (Contract(_,_,vdl,_)) : ide list = 
   List.fold_left (fun acc vd -> match vd with _,x -> x::acc ) [] vdl 
 
@@ -160,6 +164,12 @@ let rec string_of_expr = function
   | PayableCast(e) -> "payable(" ^ string_of_expr e ^ ")"
   | EnumOpt(x,o) -> x ^ "." ^ o
   | EnumCast(x,e) -> x ^ "(" ^ string_of_expr e ^ ")"
+  | FunCall(e_to,f,e_value,e_args) -> string_of_expr e_to ^ "." ^ f ^ 
+    "{value:" ^ string_of_expr e_value ^ "}" ^
+    "(" ^ (List.fold_left (fun acc ea -> acc ^ (if acc="" then "" else ",") ^ string_of_expr ea) "" e_args) ^ ")"
+  | ExecFunCall(c) -> "<" 
+    ^ string_of_cmd c 
+    ^ ">"
 
 and string_of_cmd = function
   | Skip -> "skip;"
@@ -170,8 +180,7 @@ and string_of_cmd = function
   | If(e,c1,c2) -> "if (" ^ string_of_expr e ^ ") " ^ string_of_cmd c1 ^ " else " ^ string_of_cmd c2 ^ ""
   | Send(e1,e2) -> string_of_expr e1 ^ ".transfer(" ^ (string_of_expr e2) ^ ");"
   | Req(e) -> "require " ^ string_of_expr e ^ ";"
-  | Call(f,el) -> f ^ "(" ^ (List.fold_left (fun acc e -> acc ^ "," ^ string_of_expr e) "" el) ^ ")"
-  | ExecCall(c) -> "exec{" ^ string_of_cmd c ^ "}"
+  | Return e -> "return " ^ string_of_expr e ^ ";"
   | Block(vdl,c) -> "{" 
     ^ List.fold_left (fun s d -> s ^ string_of_var_decl d ^ "; ") "" vdl 
     ^ string_of_cmd c 
@@ -179,6 +188,9 @@ and string_of_cmd = function
   | ExecBlock(c) -> "{" 
     ^ string_of_cmd c 
     ^ "}"
+  | ProcCall(e_to,f,e_value,e_args) -> string_of_expr e_to ^ "." ^ f ^ 
+    "{value:" ^ string_of_expr e_value ^ "}" ^
+    "(" ^ (List.fold_left (fun acc ea -> acc ^ (if acc="" then "" else ",") ^ string_of_expr ea) "" e_args) ^ ")"
 
 and string_of_base_type = function
 | IntBT  -> "int"
@@ -199,10 +211,11 @@ let string_of_var_decls = List.fold_left (fun s d -> s ^ (if s<>"" then ";\n  " 
 let string_of_fun_args = List.fold_left (fun s d -> s ^ (if s<>"" then ", " else "") ^ string_of_var_decl d) ""
 
 let string_of_fun_decl = function 
-  | Proc(f,al,c,v,p) -> 
+  | Proc(f,al,c,v,p,r) -> 
     "function " ^ f ^ "(" ^ (string_of_fun_args al) ^ ") " ^
     string_of_modifier v ^ " " ^
-    (if p then "payable " else "") ^ 
+    (if p then "payable " else "") ^
+    (match r with None -> "" | Some t -> "returns(" ^ string_of_base_type t ^ ") ") ^ 
     "{" ^ string_of_cmd c ^ "}\n"
   | Constr(al,c,p) ->       
     "constructor " ^ "(" ^ (string_of_fun_args al) ^ ") " ^

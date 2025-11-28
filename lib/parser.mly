@@ -45,6 +45,7 @@ open Ast
 %token CONTRACT
 %token CONSTR
 %token FUN
+%token RETURN
 %token INT
 %token UINT
 %token BOOL
@@ -62,6 +63,7 @@ open Ast
 %token PRIVATE
 %token PAYABLE
 %token IMMUTABLE
+%token RETURNS 
 
 %token FAUCET
 %token DEPLOY
@@ -71,6 +73,7 @@ open Ast
 
 %token PRAGMA
 %token SOLIDITY
+%token CARET
 %token <string> VERSION
 
 %left OR
@@ -106,9 +109,14 @@ contract:
   | opt_pragma; CONTRACT; c=ID; LBRACE; el = list(enum_decl); vdl = contract_vars; fdl = list(fun_decl); RBRACE; EOF { Contract(c,el,vdl,fdl) }
 ;
 
+rel_version:
+  | GEQ {}
+  | LEQ {}
+  | TAKES {}
+
 opt_pragma:
-  | PRAGMA; SOLIDITY; GEQ; VERSION; CMDSEP { }
-  | PRAGMA; SOLIDITY; LEQ; VERSION; CMDSEP { }
+  | PRAGMA; SOLIDITY; rel_version; VERSION; CMDSEP { }
+  | PRAGMA; SOLIDITY; CARET; VERSION; CMDSEP { }
   | /* empty */ { }
 
 contract_vars:
@@ -127,6 +135,10 @@ value:
   | TRUE { Bool true }
   | FALSE { Bool false }
 
+opt_value:
+  | LBRACE; VALUE; COLON; e_value = expr; RBRACE; { e_value }
+  | { IntConst 0 }
+
 expr:
   | n = CONST { IntConst(int_of_string n) }
   | s = STRING { AddrConst(s) }
@@ -136,6 +148,7 @@ expr:
   | e = expr; DOT; BALANCE { BalanceOf(e) }
   | e = expr; DOT; o = ID { match e with Var(x) -> EnumOpt(x,o) | _ -> failwith "enum parser error"}
   | e1 = expr; LPAREN; e2 = expr; RPAREN { match e1 with Var(x) -> EnumCast(x,e2) | _ -> failwith "enum parser error"}
+  | e_to = expr; DOT; f = ID; e_value = opt_value; LPAREN; e_args = separated_list(ARGSEP, expr); RPAREN { FunCall(e_to,f,e_value,e_args) }
   | TRUE { True }
   | FALSE { False }
   | BLOCKNUM { BlockNum }
@@ -201,6 +214,7 @@ visibility:
 nonseq_cmd:
   | SKIP; CMDSEP;  { Skip }
   | REQ; e = expr; CMDSEP; { Req(e) } 
+  | RETURN; e = expr; CMDSEP; { Return(e) } 
   | x = ID; TAKES; e = expr; CMDSEP; { Assign(x,e) }
   | x = ID; ADDTAKES; e = expr; CMDSEP; { Assign(x,Add(Var(x),e)) }
   | x = ID; SUBTAKES; e = expr; CMDSEP; { Assign(x,Sub(Var(x),e)) }
@@ -209,7 +223,7 @@ nonseq_cmd:
   | x = ID; LSQUARE; ek = expr; RSQUARE; SUBTAKES; ev = expr; CMDSEP; { MapW(x,ek,Sub(MapR(Var x,ek),ev)) }
   | rcv = expr; DOT; TRANSFER; LPAREN; amt=expr; RPAREN; CMDSEP; { Send(rcv,amt) }
   | vd = var_decl; CMDSEP; { Decl(vd) }
-  | f = ID; LPAREN; el = separated_list(ARGSEP, expr) RPAREN; CMDSEP; { Call(f,el) }
+  | e_to = expr; DOT; f = ID; e_value = opt_value; LPAREN; e_args = separated_list(ARGSEP, expr); RPAREN; CMDSEP; { ProcCall(e_to,f,e_value,e_args) }
 ;
 
 cmd:
@@ -227,12 +241,19 @@ cmd_eof:
   | c = cmd; EOF { c }
 ;
 
+opt_returns:
+  | RETURNS; LPAREN; t = base_type; RPAREN { Some t }
+  | /* no return */ { None }
+
+opt_cmd:
+  | c = cmd { c}
+  | { Skip }
+
 fun_decl:
-  | CONSTR; LPAREN; al = formal_args; RPAREN; p = opt_payable; LBRACE; RBRACE { Constr(al,Skip,p) }
-  | CONSTR; LPAREN; al = formal_args; RPAREN; p = opt_payable; LBRACE; c = cmd; RBRACE { Constr(al,c,p) }
-  | FUN; f = ID; LPAREN; al = formal_args; RPAREN; v=visibility; p = opt_payable; LBRACE; c = cmd; RBRACE { Proc(f,al,c,v,p) }
-  | FUN; f = ID; LPAREN; al = formal_args; RPAREN; v=visibility; p = opt_payable; LBRACE; vdl = list(var_decl); c = cmd; RBRACE { Proc(f,al,Block(vdl,c),v,p) }
-  | FUN; f = ID; LPAREN; al = formal_args; RPAREN; v=visibility; p = opt_payable; LBRACE; RBRACE { Proc(f,al,Skip,v,p) }
+  /* constructor(al) payable? { c } */ 
+  | CONSTR; LPAREN; al = formal_args; RPAREN; p = opt_payable; LBRACE; c = opt_cmd; RBRACE { Constr(al,c,p) }
+  /* function f(al) [public|private]? payable? returns(r)? { c } */
+  | FUN; f = ID; LPAREN; al = formal_args; RPAREN; v=visibility; p = opt_payable; r = opt_returns; LBRACE; c = opt_cmd; RBRACE { Proc(f,al,c,v,p,r) }
 ;
 
 formal_args:
@@ -245,34 +266,24 @@ formal_arg:
   | ADDR; p = opt_payable; x = ID { VarT(AddrBT(p),false),x }
 ;
 
+opt_value_tx:
+  | LBRACE; VALUE; COLON; n = CONST; RBRACE; { int_of_string n }
+  | { 0 }
+
 transaction:
-  | s = ADDRLIT; COLON; c = ADDRLIT; LPAREN; al = actual_args; RPAREN 
+  | s = ADDRLIT; COLON; c = ADDRLIT; v = opt_value_tx; LPAREN; al = actual_args; RPAREN 
   { { txsender = s;
       txto = c;
       txfun = "constructor";
       txargs = al;
-      txvalue = 0;
+      txvalue = v;
   } }
-  | s = ADDRLIT; COLON; c = ADDRLIT; LBRACE; VALUE; COLON; n = CONST; RBRACE; LPAREN; al = actual_args; RPAREN 
-  { { txsender = s;
-      txto = c;
-      txfun = "constructor";
-      txargs = al;
-      txvalue = int_of_string n;
-  } }
-  | s = ADDRLIT; COLON; c = ADDRLIT; DOT; f = ID; LPAREN; al = actual_args; RPAREN 
+  | s = ADDRLIT; COLON; c = ADDRLIT; DOT; f = ID; v = opt_value_tx; LPAREN; al = actual_args; RPAREN 
   { { txsender = s;
       txto = c;
       txfun = f;
       txargs = al;
-      txvalue = 0;
-  } }
-  | s = ADDRLIT; COLON; c = ADDRLIT; DOT; f = ID; LBRACE; VALUE; COLON; n = CONST; RBRACE; LPAREN; al = actual_args; RPAREN 
-  { { txsender = s;
-      txto = c;
-      txfun = f;
-      txargs = al;
-      txvalue = int_of_string n;
+      txvalue = v;
   } }
 ;
 

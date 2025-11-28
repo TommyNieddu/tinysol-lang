@@ -84,7 +84,7 @@ let%test "test_parse_contract_2" = try
   "contract C { uint x; function f() public { x = block.number; } }"
   = 
   (Contract ("C", [], [(VarT(UintBT,false), "x")],
-  [Proc ("f", [], Assign ("x", BlockNum), Public, false)]))
+  [Proc ("f", [], Assign ("x", BlockNum), Public, false, None)]))
   with _ -> false
 
 let%test "test_parse_contract_3" = try 
@@ -110,7 +110,7 @@ let%test "test_parse_contract_5" = try
   "contract C { address payable a; function f() public payable { a.transfer(address(this).balance); } }"
   =
   (Contract ("C", [], [(VarT (AddrBT true, false), "a")],
-  [Proc ("f", [], Send (Var "a", BalanceOf (AddrCast This)), Public, true)]))
+  [Proc ("f", [], Send (Var "a", BalanceOf (AddrCast This)), Public, true, None)]))
   with _ -> false
 
 let%test "test_parse_contract_6" = try 
@@ -119,7 +119,7 @@ let%test "test_parse_contract_6" = try
   =
   (Contract ("C", [], [],
  [Proc ("f", [(VarT (AddrBT true, false), "a")],
-   Send (Var "a", BalanceOf (AddrCast This)), Public, true)]))
+   Send (Var "a", BalanceOf (AddrCast This)), Public, true, None)]))
   with _ -> false
 
 let%test "test_parse_contract_7" = try
@@ -128,7 +128,7 @@ let%test "test_parse_contract_7" = try
   =
   (Contract ("C", [Enum ("State", ["IDLE"; "REQ"])],
   [(VarT (UintBT, false), "x")],
-  [Proc ("f", [], Assign ("x", Add (Var "x", IntConst 1)), Public, false)]))
+  [Proc ("f", [], Assign ("x", Add (Var "x", IntConst 1)), Public, false, None)]))
   with _ -> false
 
 let%test "test_parse_contract_8" = try
@@ -137,7 +137,7 @@ let%test "test_parse_contract_8" = try
   =
   (Contract ("C", [Enum ("State", ["IDLE"; "REQ"])],
  [(VarT (CustomBT "State", false), "s")],
- [Proc ("f", [], Assign ("s", EnumOpt ("State", "REQ")), Public, false)]))
+ [Proc ("f", [], Assign ("s", EnumOpt ("State", "REQ")), Public, false, None)]))
   with _ -> false
 
 (********************************************************************************

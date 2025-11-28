@@ -68,7 +68,7 @@ let no_dup_fun_decls vdl =
   vdl 
   |> List.map (fun fd -> match fd with 
     | Constr(_) -> "constructor"
-    | Proc(f,_,_,_,_) -> f) 
+    | Proc(f,_,_,_,_,_) -> f) 
   |> dup
   |> fun res -> match res with None -> true | Some x -> raise (MultipleDecl x)  
 
@@ -217,6 +217,8 @@ let rec typecheck_expr (edl : enum_decl list) (vdl : var_decl list) = function
   | EnumCast(x,e) -> (match typecheck_expr edl vdl e with
       | IntConstET _ | UintET | IntET -> CustomET x
       | _ as t -> raise (TypeError (e,t,IntET)))
+  | FunCall(_) -> failwith "TODO"
+  | ExecFunCall(_) -> failwith "TODO"
 
 let is_immutable (x : ide) (vdl : var_decls) = 
   List.fold_left (fun acc vd -> match vd with
@@ -270,6 +272,7 @@ let rec typecheck_cmd (is_constr : bool) (edl : enum_decl list) (vdl : var_decl 
     | Req(e) -> 
         let te = typecheck_expr edl vdl e in
         if te = BoolET then true else raise (TypeError (e,te,BoolET))
+    | Return(_) -> failwith "TODO"
     | Block(lvdl,c) -> 
         typecheck_local_decls lvdl &&
         let vdl' = merge_var_decls vdl lvdl in
@@ -281,7 +284,7 @@ let typecheck_fun (edl : enum_decl list) (vdl : var_decl list) = function
       no_dup_var_decls al &&
       typecheck_local_decls al && 
       typecheck_cmd true edl (merge_var_decls vdl al) c
-  | Proc (_,al,c,_,__) ->
+  | Proc (_,al,c,_,__,_) ->
       no_dup_var_decls al && 
       typecheck_local_decls al &&
       typecheck_cmd false edl (merge_var_decls vdl al) c

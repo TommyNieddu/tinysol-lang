@@ -59,6 +59,7 @@ rule read_token =
   | "if" { IF }
   | "else" { ELSE }
   | "require" { REQ }
+  | "return" { RETURN }
   | "constructor" { CONSTR } 
   | "function" { FUN }
   | "," { ARGSEP }  
@@ -72,12 +73,14 @@ rule read_token =
   | "private" { PRIVATE }
   | "payable" { PAYABLE }
   | "immutable" { IMMUTABLE }
+  | "returns" { RETURNS }
   | "faucet" { FAUCET }
   | "deploy" { DEPLOY }
   | "assert" { ASSERT }
   | "revert" { REVERT }
   | "block.number" { BLOCKNUM }
   | "pragma" { PRAGMA }
+  | "^" { CARET }
   | "solidity" { SOLIDITY }
   | id { ID (Lexing.lexeme lexbuf) }
   | addrlit { ADDRLIT (Lexing.lexeme lexbuf) }

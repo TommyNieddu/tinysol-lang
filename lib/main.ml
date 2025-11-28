@@ -131,6 +131,8 @@ let rec eval_expr (st : sysstate) (a : addr) = function
         | None -> raise (TypeError "EnumCast"))
       | _ -> raise (TypeError "EnumCast: expression is not an Int")
     )
+  | FunCall(_) -> failwith "TODO"
+  | ExecFunCall(_) -> failwith "TODO"
 
 let eval_var_decls (vdl : var_decl list) (e : env): env =
   List.fold_left
@@ -174,10 +176,18 @@ and blockify_subterms = function
 
 let blockify_fun = function
   | Constr (al,c,p) -> Constr (al,blockify_cmd c,p)
-  | Proc (f,al,c,v,p) -> Proc(f,al,blockify_cmd c,v,p)
+  | Proc (f,al,c,v,p,r) -> Proc(f,al,blockify_cmd c,v,p,r)
 
 let blockify_contract (Contract(c,el,vdl,fdl)) =
   Contract(c,el,vdl,List.map blockify_fun fdl)
+
+(******************************************************************************)
+(*              Retrieving contracts and functions from state                 *)
+(******************************************************************************)
+
+let find_all _ _ _ = failwith "TODO"
+
+let get_contract_from_fun _ = failwith "TODO"
 
 (******************************************************************************)
 (*                       Small-step semantics of commands                     *)
@@ -216,10 +226,8 @@ let rec trace1_cmd = function
     | Req(e) -> 
         if eval_expr st a e = Bool true then St st 
         else Reverted 
-    | Call(_,_) -> failwith "TODO"
-    | ExecCall _  -> failwith "TODO"
+    | Return(_) -> failwith "TODO"
     | Block(vdl,c) ->
-        (* let e = topenv st in *)
         let e' = eval_var_decls vdl botenv in
         Cmd(ExecBlock c, { st with stackenv = e'::st.stackenv} , a)
     | ExecBlock(c) -> (match trace1_cmd (Cmd(c,st,a)) with
@@ -227,7 +235,19 @@ let rec trace1_cmd = function
         | Reverted -> Reverted
         | Cmd(c1',st1,a') -> Cmd(ExecBlock(c1'),st1,a'))
     | Decl _ -> assert(false) (* should not happen after blockify *)
-    )
+    | ProcCall(e_to,f,e_value,_) ->
+        (* retrieve function declaration *)
+        let call_to = eval_expr st a e_to in
+        let call_value = int_of_exprval (eval_expr st a e_value) in
+        if lookup_balance a st < call_value then 
+          failwith ("sender " ^ a ^ " has not sufficient wei balance")
+        else
+        let fdecl = find_all call_to f st in  
+        (* setup new stack frame TODO *)
+        let e' = botenv in
+        let c = get_contract_from_fun fdecl in
+        Cmd(ExecBlock(c), { st with stackenv = e'::st.stackenv} , a)
+  )
 
 (* (match (topenv st f,eval_expr st e) with
           (IProc(a,c),Int n) ->
@@ -313,7 +333,7 @@ let find_fun (Contract(_,_,_,fdl)) (f : ide) : fun_decl option =
   List.fold_left 
   (fun acc fd -> match fd with
     | Constr(_) -> if acc=None && f="constructor" then Some fd else acc  
-    | Proc(g,_,_,_,_) -> if acc=None && f=g then Some fd else acc
+    | Proc(g,_,_,_,_,_) -> if acc=None && f=g then Some fd else acc
   )
   None
   fdl
@@ -373,7 +393,7 @@ let exec_tx (n_steps : int) (tx: transaction) (st : sysstate) : sysstate =
           stackenv = st.stackenv;
           blocknum = 0;
           active = tx.txto :: st.active }
-    | Some (Proc(_,xl,c,_,p))
+    | Some (Proc(_,xl,c,_,p,_))
     | Some (Constr(xl,c,p)) ->
         if not p && tx.txvalue>0 then 
           failwith "exec_tx: sending ETH to a non-payable function"
