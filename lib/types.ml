@@ -1,4 +1,5 @@
 open Ast
+open Utils
 
 let is_val = function
   | BoolConst _ 
@@ -121,7 +122,7 @@ let lookup_enum_option (st : sysstate) (enum_name : ide) (option_name : ide) : i
       |> fun edl -> (match edl with [Enum(_,ol)] -> Some ol | _ -> None)  
       |> fun l_opt -> (match l_opt with 
         | None -> None
-        | Some ol -> List.find_index (fun o -> o=option_name) ol)
+        | Some ol -> find_index (fun o -> o=option_name) ol)
     | _ -> assert(false) (* should not happen *)
   with _ -> None
 

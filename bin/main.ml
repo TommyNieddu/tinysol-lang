@@ -1,6 +1,7 @@
 open TinysolLib.Main
 open TinysolLib.Utils
 open TinysolLib.Cli
+open TinysolLib.Prettyprint
 
 ;;
 

@@ -1,4 +1,5 @@
 open Ast
+open Utils
 
 (* Types for expressions are a refinement of variable declaration types, 
  * since we want to give more specific types to integer constants in order
@@ -210,7 +211,7 @@ let rec typecheck_expr (edl : enum_decl list) (vdl : var_decl list) = function
       |> fun edl -> (match edl with [Enum(_,ol)] -> Some ol | _ -> None)  
       |> fun l_opt -> (match l_opt with 
         | None -> raise (EnumNameNotFound enum_name)
-        | Some ol -> (match List.find_index (fun o -> o=option_name) ol with
+        | Some ol -> (match find_index (fun o -> o=option_name) ol with
           None -> raise (EnumOptionNotFound(enum_name,option_name))
           | Some i -> IntConstET i))
   | EnumCast(x,e) -> (match typecheck_expr edl vdl e with

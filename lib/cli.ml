@@ -6,6 +6,7 @@ open Ast
 open Types
 open Utils
 open Main
+open Prettyprint
 
 let string_of_cli_cmd = function 
   | Faucet(a,n) -> "faucet " ^ a ^ " " ^ string_of_int n
