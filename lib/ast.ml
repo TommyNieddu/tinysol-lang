@@ -51,6 +51,7 @@ and cmd =
   | ExecBlock of cmd            (* Runtime only: c is the cmd being reduced *)
   | Decl of var_decl            (* Static-time only: Decl is converted into block*)
   | ProcCall of expr * ide * expr * expr list
+  | ExecProc of cmd
   | Return of expr
 
 (* Base types *)

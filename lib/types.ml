@@ -51,9 +51,14 @@ type account_state = {
   code : contract option;
 }
 
+type frame = {
+  callee: addr;
+  locals: env list;
+}
+
 type sysstate = {
   accounts: addr -> account_state;
-  stackenv: env list;
+  callstack: frame list;
   blocknum: int;
   active: addr list; (* set of all active addresses (for debugging)*)
 }
@@ -63,6 +68,7 @@ type exec_state =
   | St of sysstate 
   | CmdSt of cmd * sysstate
   | Reverted
+  | Returned of exprval
 
 let rec last_sysstate = function
     [] -> failwith "last on empty list"
@@ -72,13 +78,18 @@ let rec last_sysstate = function
 
 (* Functions to access and manipulate the state *)
 
-let topenv (st: sysstate) : env = match st.stackenv with
-  [] -> failwith "empty stack"
-| e::_ -> e
+let pop_callstack (st : sysstate) : sysstate = match st.callstack with
+    [] -> failwith "empty call stack"
+  | _::fl -> { st with callstack = fl } 
 
-let popenv (st: sysstate) : sysstate = match st.stackenv with
-    [] -> failwith "empty stack"
-  | _::el -> { st with stackenv = el } 
+let push_callstack (fr : frame) (st : sysstate) : sysstate = 
+  { st with callstack = fr :: st.callstack }
+
+let pop_locals (st: sysstate) : sysstate = match st.callstack with
+    [] -> failwith "empty call stack"
+  | f::fl -> match f.locals with 
+    | [] -> failwith "empty locals stack"
+    | _::el -> let f' = {f with locals = el } in { st with callstack = f'::fl } 
 
 (* initial (empty) environment *)
 let botenv = fun x -> failwith ("variable " ^ x ^ " unbound")
@@ -87,7 +98,7 @@ let bind x v f = fun y -> if y=x then v else f y
 
 (* lookup for variable x in sysstate st *)
 
-let lookup_env (x : ide) (el : env list) : exprval option =
+let lookup_locals (x : ide) (el : env list) : exprval option =
   List.fold_left
   (fun acc e -> match acc with
     | Some v -> Some v
@@ -95,26 +106,25 @@ let lookup_env (x : ide) (el : env list) : exprval option =
   None
   el
 
-let lookup_var (x : ide) (st : sysstate) : exprval =
-  (* look up for x in environment stack *)
-  match lookup_env x st.stackenv with
-  | Some v -> v 
+let lookup_var (x : ide) (st : sysstate) : exprval option =
+  let fr = List.hd st.callstack in
+  (* look up for x in locals stack *)
+  match lookup_locals x fr.locals with
+  | Some v -> Some v 
   | None -> 
-    (* retrieve the address of the currently executed contract *)
-    match lookup_env "this" st.stackenv with
-    | Some (Addr a) -> 
-      (* look up for x in storage of a *)
-      let cs = st.accounts a in
-      cs.storage x
-    | _ -> failwith "this not bound or not bound to an address"
+    (* look up for x in storage of callee of top call frame *)
+    let cs = st.accounts fr.callee in
+    try Some (cs.storage x)
+    with _ -> None
 
 let lookup_balance (a : addr) (st : sysstate) : int =
   try (st.accounts a).balance
   with _ -> 0
 
+
 let lookup_enum_option (st : sysstate) (enum_name : ide) (option_name : ide) : int option = 
   try 
-    let a = addr_of_exprval (Option.get(lookup_env "this" st.stackenv)) in 
+    let a = (List.hd st.callstack).callee in 
     match (st.accounts a).code with
     | Some(Contract(_,edl,_,_)) -> 
       edl
@@ -128,7 +138,7 @@ let lookup_enum_option (st : sysstate) (enum_name : ide) (option_name : ide) : i
 
 let reverse_lookup_enum_option (st : sysstate) (enum_name : ide) (option_index : int) : ide option = 
   try
-    let a = addr_of_exprval (Option.get(lookup_env "this" st.stackenv)) in 
+    let a = (List.hd st.callstack).callee in 
     match (st.accounts a).code with
     | Some(Contract(_,edl,_,_)) -> 
       edl
@@ -139,7 +149,6 @@ let reverse_lookup_enum_option (st : sysstate) (enum_name : ide) (option_index :
         | Some ol -> List.nth_opt ol option_index)
     | _ -> assert(false) (* should not happen *)
   with _ -> None
-
 
 let exists_account (st : sysstate) (a : addr) : bool =
   try let _ = st.accounts a in true
@@ -161,30 +170,41 @@ let rec update_env (el : env list) (x : ide) (v : exprval) : env list =
       (bind x v e) :: el'
     with _ -> e :: (update_env el' x v)
 
+
+(* 
+  Updates the variable x to value x in environment stack el. 
+  The variable is searched throughout the environment frames in the stack. 
+ *)
+let rec update_locals (el : env list) (x : ide) (v : exprval) : env list =
+ match el with
+  | [] -> failwith (x ^ " not bound in env")
+  | e::el' -> 
+    try let _ = e x in (* checks if ide x is bound in e *)
+      (bind x v e) :: el'
+    with _ -> e :: (update_locals el' x v)
+
 (* 
   Updates the variable x to value x in state st. 
   The variable is first searched in the topmost environment, and then in the contract storage. 
  *)
 let update_var (st : sysstate) (x : ide) (v : exprval) : sysstate = 
+  let fr = List.hd st.callstack in
+
   (* first tries to update environment if x is bound there *)
    try 
-    let el' = update_env st.stackenv x v in
-    { st with stackenv = el' }
+    let fr' = { fr with locals = update_locals fr.locals x v } in
+    { st with callstack = fr' :: (List.tl st.callstack)  }
   with _ -> 
     (* if not, tries to update storage of a *)
-    (* first, retrieve the address of the currently executed contract *)
-    match lookup_env "this" st.stackenv with
-    | Some (Addr a) -> 
-      let cs = st.accounts a in
-      if exists_ide_in_storage cs x then 
-        let cs' = { cs with storage = bind x v cs.storage } in 
-        { st with accounts = bind a cs' st.accounts }
-      else failwith (x ^ " not bound in storage of " ^ a)   
-    | _ -> failwith "this not bound or not bound to an address"
+    let cs = st.accounts fr.callee in
+    if exists_ide_in_storage cs x then 
+      let cs' = { cs with storage = bind x v cs.storage } in 
+      { st with accounts = bind fr.callee cs' st.accounts }
+    else failwith (x ^ " not bound in storage of " ^ fr.callee)   
 
 
 let update_map (st : sysstate) (x:ide) (k:exprval) (v:exprval) : sysstate = 
-  let a = addr_of_exprval (Option.get(lookup_env "this" st.stackenv)) in 
+  let a = addr_of_exprval (Option.get(lookup_var "this" st)) in 
   let cs = st.accounts a in
     if exists_ide_in_storage cs x then 
       match cs.storage x with

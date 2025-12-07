@@ -42,8 +42,7 @@ let exec_cli_cmd (cc : cli_cmd) (st : sysstate) : sysstate = match cc with
       |> fun _ -> failwith ("test failed: transaction " ^ string_of_transaction tx ^ " should revert") 
     with _ -> st)
   | Assert(a,e) -> 
-    let env0 = bind "this" (Addr a) botenv in 
-    (match eval_expr { st with stackenv = [env0] } e with
+    (match eval_expr { st with callstack = [{callee = a; locals = []}] } e with
     | Bool true -> st
     | _ -> failwith ("assertion violation: " ^ string_of_cli_cmd cc)) 
   | SetBlockNum(n) -> { st with blocknum = n }

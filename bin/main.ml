@@ -1,5 +1,6 @@
 open TinysolLib.Main
 open TinysolLib.Utils
+open TinysolLib.Types
 open TinysolLib.Cli
 open TinysolLib.Prettyprint
 
@@ -13,7 +14,8 @@ match Array.length(Sys.argv) with
 (* exec_cmd *)
 | 3 when Sys.argv.(1)="exec_cmd" -> (match read_line() with
     | Some s when s<>"" -> s |> parse_cmd |> blockify_cmd
-      |> fun c -> trace_cmd (int_of_string Sys.argv.(2)) c init_sysstate
+      |> fun c -> trace_cmd (int_of_string Sys.argv.(2)) c 
+      (push_callstack {callee="0xC"; locals=[];} init_sysstate)
       |> string_of_trace |> print_string
     | _ -> print_newline())
 (* parse_contract *) 
@@ -25,7 +27,7 @@ match Array.length(Sys.argv) with
   Sys.argv.(2) |> read_lines 
   |> List.filter (fun s -> not (is_empty_or_comment s)) 
   |> List.map parse_cli_cmd 
-  |> fun l -> exec_cli_cmd_list true l init_sysstate 
+  |> fun l -> exec_cli_cmd_list true l (init_sysstate)
   |> string_of_sysstate [] |> print_string
 (* wrong usage *)      
 | _ -> print_string "Usage:

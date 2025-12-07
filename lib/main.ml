@@ -90,13 +90,13 @@ exception NoRuleApplies
 let rec step_expr (e,st) = match e with
   | e when is_val e -> raise NoRuleApplies
 
-  | This -> (expr_of_exprval (Option.get (lookup_env "this" st.stackenv)), st)
+  | This -> (expr_of_exprval (Addr (List.hd(st.callstack)).callee), st)
 
   | BlockNum -> (IntConst st.blocknum, st)
 
-  | Var x -> (expr_of_exprval (lookup_var x st), st)  
+  | Var x -> (expr_of_exprval (Option.get (lookup_var x st)), st)  
 
-  | MapR(Var x,e2) when is_val e2 -> (match lookup_var x st with
+  | MapR(Var x,e2) when is_val e2 -> (match Option.get (lookup_var x st) with
     | Map m -> (expr_of_exprval (m (exprval_of_expr e2)), st)
     | _ -> failwith "step_expr: wrong type checking of map?")
   | MapR(Var x,e2) ->
@@ -231,6 +231,7 @@ let rec step_expr (e,st) = match e with
   | PayableCast(e) -> 
     let (e', st') = step_expr (e, st) in (PayableCast(e'), st')    
 
+
   | EnumOpt(x,o) -> (match lookup_enum_option st x o with
     | Some n -> (IntConst n, st)
     | None -> failwith "Enum lookup failed (bug in typechecking?)")
@@ -247,7 +248,7 @@ let rec step_expr (e,st) = match e with
 
   | FunCall(e_to,f,e_value,e_args) when is_val e_to && is_val e_value && List.for_all is_val e_args ->  
     (* retrieve function declaration *)
-    let txfrom = addr_of_exprval (Option.get(lookup_env "this" st.stackenv)) in 
+    let txfrom = addr_of_exprval (Addr (List.hd(st.callstack)).callee) in 
     let txto = addr_of_expr e_to in
     let txvalue  = int_of_expr e_value in
     let txargs = List.map (fun arg -> exprval_of_expr arg) e_args in
@@ -265,10 +266,11 @@ let rec step_expr (e,st) = match e with
       (VarT(AddrBT false,true),"this") :: (VarT(AddrBT false,false),"msg.sender") :: (VarT(IntBT,false),"msg.value") :: xl,
       Addr txto :: Addr txfrom :: Int txvalue :: txargs
     in
+    let fr' = { callee = txto; locals = [bind_fargs_aargs xl' vl'] } in 
     let st' = { accounts = st.accounts 
                   |> bind txfrom from_state
                   |> bind txto to_state; 
-                stackenv = bind_fargs_aargs xl' vl' :: st.stackenv;
+                callstack = fr' :: st.callstack;
                 blocknum = st.blocknum;
                 active = st.active } in
     let c = get_cmd_from_fun fdecl in
@@ -286,11 +288,12 @@ let rec step_expr (e,st) = match e with
     let (e_to', st') = step_expr (e_to, st) in
     (FunCall(e_to',f,e_value,e_args), st')
 
-  | ExecFunCall(Return e) when is_val e -> (e, popenv st)
+  | ExecFunCall(Return e) when is_val e -> (e, pop_callstack st)
 
   | ExecFunCall(c) -> (match step_cmd (CmdSt(c,st)) with
     | St _ -> failwith "function terminated without return"
     | Reverted -> failwith "no"
+    | Returned v -> (expr_of_exprval v, pop_callstack st)
     | CmdSt(c',st') -> (ExecFunCall(c'),st')
     )
 
@@ -310,6 +313,7 @@ and step_expr_list (el, st) = match el with
 and step_cmd = function
     St _ -> raise NoRuleApplies
   | Reverted -> Reverted
+  | Returned v -> Returned v
   | CmdSt(c,st) -> (match c with
 
     | Skip -> St st
@@ -331,6 +335,7 @@ and step_cmd = function
     | Seq(c1,c2) -> (match step_cmd (CmdSt(c1,st)) with
         | St st1 -> CmdSt(c2,st1)
         | Reverted -> Reverted
+        | Returned v -> Returned v
         | CmdSt(c1',st1) -> CmdSt(Seq(c1',c2),st1))
 
     | If(e,c1,c2) when is_val e -> (match exprval_of_expr e with
@@ -344,7 +349,7 @@ and step_cmd = function
     | Send(ercv,eamt) when is_val ercv && is_val eamt -> 
         let rcv = addr_of_expr ercv in 
         let amt = int_of_expr eamt in
-        let from = addr_of_exprval (Option.get(lookup_env "this" st.stackenv)) in 
+        let from = (List.hd st.callstack).callee in 
         let from_bal = (st.accounts from).balance in
         if from_bal<amt then failwith "insufficient balance" else
         let from_state =  { (st.accounts from) with balance = from_bal - amt } in
@@ -368,12 +373,12 @@ and step_cmd = function
     | Req(e) -> 
       let (e', st') = step_expr (e, st) in CmdSt(Req(e'), st')
 
-    | Return(e) when is_val e -> failwith "in questo caso dovrei terminare??"
+    | Return(e) when is_val e -> Returned (exprval_of_expr e) 
     | Return(e) -> 
       let (e', st') = step_expr (e, st) in CmdSt(Return(e'), st')
     
     | Block(vdl,c) ->
-        let e' = List.fold_left (fun acc vd ->
+        let r' = List.fold_left (fun acc vd ->
           match vd with
             | VarT(IntBT,_),x  
             | VarT(UintBT,_),x -> acc |> bind x (Int 0)
@@ -382,18 +387,21 @@ and step_cmd = function
             | VarT(CustomBT _,_),x -> acc |> bind x (Int 0)
             | MapT(_),_ -> failwith "mappings cannot be used in local declarations" 
         ) botenv vdl in
-        CmdSt(ExecBlock c, { st with stackenv = e'::st.stackenv})
+        let fr,frl = (List.hd st.callstack),(List.tl st.callstack) in
+        let fr' = { fr with locals = r'::fr.locals } in
+        CmdSt(ExecBlock c, { st with callstack = fr'::frl })
 
     | ExecBlock(c) -> (match step_cmd (CmdSt(c,st)) with
-        | St st -> St (popenv st)
+        | St st -> St (pop_locals st)
         | Reverted -> Reverted
+        | Returned v -> Returned v
         | CmdSt(c1',st1) -> CmdSt(ExecBlock(c1'),st1))
 
     | Decl _ -> assert(false) (* should not happen after blockify *)
 
     | ProcCall(e_to,f,e_value,e_args) when is_val e_to && is_val e_value && List.for_all is_val e_args ->
         (* retrieve function declaration *)
-        let txfrom = addr_of_exprval (Option.get(lookup_env "this" st.stackenv)) in 
+        let txfrom = (List.hd (st.callstack)).callee in 
         let txto   = addr_of_expr e_to in
         let txvalue  = int_of_expr e_value in
         let txargs = List.map (fun arg -> exprval_of_expr arg) e_args in
@@ -411,14 +419,15 @@ and step_cmd = function
           (VarT(AddrBT false,true),"this") :: (VarT(AddrBT false,false),"msg.sender") :: (VarT(IntBT,false),"msg.value") :: xl,
           Addr txto :: Addr txfrom :: Int txvalue :: txargs
         in
+        let fr' = { callee = txto; locals = [bind_fargs_aargs xl' vl'] } in
         let st' = { accounts = st.accounts 
                       |> bind txfrom from_state
                       |> bind txto to_state; 
-                    stackenv = bind_fargs_aargs xl' vl' :: st.stackenv;
+                    callstack = fr' :: st.callstack;
                     blocknum = st.blocknum;
                     active = st.active } in
         let c = get_cmd_from_fun fdecl in
-        CmdSt(ExecBlock(c), st')
+        CmdSt(ExecProc(c), st')
 
     | ProcCall(e_to,f,e_value,e_args) when is_val e_to && is_val e_value -> 
       let (e_args', st') = step_expr_list (e_args, st) in 
@@ -432,6 +441,11 @@ and step_cmd = function
       let (e_to', st') = step_expr (e_to, st) in 
       CmdSt(ProcCall(e_to',f,e_value,e_args), st')
 
+    | ExecProc(c) -> (match step_cmd (CmdSt(c,st)) with
+      | St st -> St (pop_callstack st)
+      | Reverted -> Reverted
+      | Returned v -> Returned v
+      | CmdSt(c1',st1) -> CmdSt(ExecBlock(c1'),st1))
   )
 
 (* recursively evaluate expression until it reaches a value (might not terminate) *)
@@ -456,7 +470,7 @@ let init_storage (Contract(_,_,vdl,_)) : ide -> exprval =
 
 let init_sysstate = { 
     accounts = (fun a -> failwith ("account " ^ a ^ " unbound")); 
-    stackenv = [botenv];
+    callstack = [];
     blocknum = 0;
     active = []; 
 }
@@ -534,7 +548,7 @@ let exec_tx (n_steps : int) (tx: transaction) (st : sysstate) : sysstate =
         { accounts = st.accounts 
             |> bind tx.txsender sender_state
             |> bind tx.txto to_state; 
-          stackenv = st.stackenv;
+          callstack = st.callstack;
           blocknum = 0;
           active = tx.txto :: st.active }
     | Some (Proc(_,xl,c,_,p,_))
@@ -552,14 +566,15 @@ let exec_tx (n_steps : int) (tx: transaction) (st : sysstate) : sysstate =
             (VarT(AddrBT false,true),"this") :: (VarT(AddrBT false,false),"msg.sender") :: (VarT(IntBT,false),"msg.value") :: xl,
             Addr tx.txto :: Addr tx.txsender :: Int tx.txvalue :: tx.txargs
         in
+        let fr' = { callee = tx.txto; locals = [bind_fargs_aargs xl' vl'] } in
         let st' = { accounts = st.accounts 
                       |> bind tx.txsender sender_state
                       |> bind tx.txto to_state; 
-                    stackenv = bind_fargs_aargs xl' vl' :: st.stackenv;
+                    callstack = fr' :: st.callstack;
                     blocknum = 0;
                     active = if deploy then tx.txto :: st.active else st.active } in
         try (match exec_cmd n_steps c st' with
-          | St st'' -> st'' |> popenv
+          | St st'' -> st'' |> pop_callstack
           | Reverted -> st  (* if the command reverts, the new state is st *)
           | _ -> st (* exec_tx: execution of command not terminated (not enough gas?) => revert *)
         )

@@ -11,11 +11,12 @@ let test_exec_cmd (c,n_steps,var,exp_val) =
   c
   |> parse_cmd
   |> blockify_cmd
-  |> fun c -> last (trace_cmd n_steps c init_sysstate)
+  |> fun c -> last (trace_cmd n_steps c (push_callstack {callee="0xC"; locals=[];} init_sysstate))
   |> fun t -> match t with
-  | St st -> lookup_var var st = exp_val
-  | CmdSt(_,st) -> lookup_var var st = exp_val
+  | St st -> Option.get (lookup_var var st) = exp_val
+  | CmdSt(_,st) -> Option.get (lookup_var var st) = exp_val
   | Reverted -> false
+  | Returned _ -> false
 
 let%test "test_exec_cmd_1" = test_exec_cmd
   ("{ int x; x=51; skip; }", 2, "x", Int 51)  
@@ -88,7 +89,8 @@ let test_exec_tx (src: string) (txl: string list) (els : string list) =
   |> faucet "0xB" 100
   |> deploy_contract { txsender="0xA"; txto="0xC"; txfun="constructor"; txargs=[]; txvalue=0; } src 
   |> exec_tx_list 1000 txl 
-  |> fun st -> List.map (fun x -> x |> parse_expr |> eval_expr { st with stackenv = [bind "this" (Addr "0xC") botenv]}) els 
+  |> fun st -> List.map (fun x -> x |> parse_expr |> eval_expr 
+      { st with callstack = [{ callee = "0xC"; locals = []}] } ) els 
   |> List.for_all (fun v -> v = Bool true)
 
 let c1 = "contract C {
@@ -298,7 +300,8 @@ let test_exec_fun (src1: string) (src2: string) (txl : string list) (els : (addr
   |> deploy_contract { txsender="0xA"; txto="0xC"; txfun="constructor"; txargs=[]; txvalue=0; } src1 
   |> deploy_contract { txsender="0xA"; txto="0xD"; txfun="constructor"; txargs=[]; txvalue=100; } src2 
   |> exec_tx_list 1000 txl 
-  |> fun st -> List.map (fun (a,x) -> x |> parse_expr |> eval_expr { st with stackenv = [bind "this" (Addr a) botenv]}) els 
+  |> fun st -> List.map (fun (a,x) -> x |> parse_expr |> eval_expr 
+    { st with callstack = [ { callee = a; locals = [] } ] }) els 
   |> List.for_all (fun v -> v = Bool true)
 
 let%test "test_proc_1" = test_exec_fun

@@ -52,7 +52,8 @@ and vars_of_cmd = function
   | Req(e) -> vars_of_expr e    
   | Return(e) -> vars_of_expr e               
   | Block(_,c) -> vars_of_cmd c
-  | ExecBlock(c) -> vars_of_cmd c
+  | ExecBlock(c) 
+  | ExecProc(c) -> vars_of_cmd c
   | ProcCall(e_to,_,e_value,e_args) -> union (vars_of_expr e_to) (union (vars_of_expr e_value) 
     (List.fold_left (fun acc ea -> union acc (vars_of_expr ea)) [] e_args))
   
@@ -131,6 +132,9 @@ and string_of_cmd = function
   | ProcCall(e_to,f,e_value,e_args) -> string_of_expr e_to ^ "." ^ f ^ 
     "{value:" ^ string_of_expr e_value ^ "}" ^
     "(" ^ (List.fold_left (fun acc ea -> acc ^ (if acc="" then "" else ",") ^ string_of_expr ea) "" e_args) ^ ")"
+  | ExecProc(c) -> "{" 
+    ^ string_of_cmd c 
+    ^ "}"
 
 and string_of_base_type = function
 | IntBT  -> "int"
@@ -187,7 +191,7 @@ let string_of_env e vl =
     with _ -> helper e vl' 
   in "{" ^ helper e vl ^ "}"
 
-let string_of_envstack el vl = 
+let string_of_locals el vl = 
   let rec helper el vl = match el with
     [] -> ""
   | [e] -> (string_of_env e vl)
@@ -212,17 +216,28 @@ let string_of_accounts (st : sysstate) =
   (List.fold_left (fun acc a -> acc ^ a ^ " -> " ^ (string_of_account_state (st.accounts a)) ^ " ") "" st.active) ^ 
   "]"
 
+let string_of_frame (f : frame) (vl : ide list)=
+  f.callee ^ " " ^ (string_of_locals f.locals vl)
+
+let string_of_callstack (fl : frame list) (vl : ide list) = 
+    let rec helper fl vl = match fl with
+    [] -> ""
+  | [f] -> (string_of_frame f vl)
+  | f::fl' -> (string_of_frame f vl) ^ ";" ^ (helper fl' vl)
+in "[" ^ (helper fl vl) ^ "]" 
+
 let string_of_sysstate (evl : ide list) (st : sysstate) =
   "accounts: " ^ 
   string_of_accounts st ^
   if evl=[] then "" else 
   ("\n" ^
-  "envstack: " ^
-  string_of_envstack st.stackenv evl)
+  "callstack: " ^
+  string_of_callstack st.callstack evl)
 
 let string_of_execstate evl = function
   | St st -> string_of_sysstate evl st
   | Reverted -> "reverted"
+  | Returned v -> "returned " ^ string_of_exprval v
   | CmdSt (c,st) -> 
       "cmd: " ^ (string_of_cmd c) ^ "\n" ^ 
       (string_of_sysstate evl st) 
@@ -231,6 +246,7 @@ let string_of_trace stl = match stl with
   [] -> ""
 | St _::_ -> ""
 | Reverted :: _ -> "reverted"
+| Returned v :: _ -> "returned " ^ string_of_exprval v 
 | CmdSt (c,_)::_ -> let evl = vars_of_cmd c in  
   let rec helper stl = (match stl with
     [] -> ""
