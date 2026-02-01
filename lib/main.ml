@@ -35,8 +35,6 @@ let sc_pop () =
   | _ :: tl -> sc_stack := tl
   | [] -> ()
 
-let mtest : bool ref = ref false
-
 (*helper to extract the mutability of a function declaration*)
 let is_view = function
   | Proc(_,_,_,_,m,_) | Constr(_,_,m) -> 
