@@ -353,7 +353,16 @@ and step_cmd = function
         let from_bal = (st.accounts from).balance in
         if from_bal<amt then Reverted "insufficient balance" else
         let from_state =  { (st.accounts from) with balance = from_bal - amt } in
-        if exists_account st rcv then
+        (*
+          issue 7: the receive() function must be called upon transfers
+
+          added an if branch that checks if an account with the ercv address exist
+          and if it contains a function "receive". If it does, instead of returning St
+          and terminating we execute the ProcCall rule for the function "receive"
+        *)
+        if exists_account st rcv && (find_fun_in_sysstate st rcv "receive")<>None then
+          CmdSt ( ProcCall (ercv, "receive", eamt, []), st)
+        else if exists_account st rcv then
           let rcv_state = { (st.accounts rcv) with balance = (st.accounts rcv).balance + amt } in
            St { st with accounts = st.accounts |> bind rcv rcv_state |> bind from from_state}
         else
