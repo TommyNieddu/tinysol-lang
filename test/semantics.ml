@@ -695,3 +695,58 @@ let%test "test_fun_20" = test_exec_fun
   }"
   ["0xA:0xD.g()"] 
   [("0xC","this.balance==100"); ("0xD","this.balance==0")]
+
+
+(*issue 3 tests*)
+let test_tx_result (src: string) (tx: string) (expect_ok: bool) : bool =
+  let tx = parse_transaction tx in
+  init_sysstate
+  |> faucet "0xA" 100
+  |> deploy_contract { txsender="0xA"; txto="0xC"; txfun="constructor"; txargs=[]; txvalue=0; } src
+  |> fun st ->
+     match exec_tx 1000 tx st with
+     | Ok _ -> expect_ok
+     | Error _ -> not expect_ok
+
+let%test "issue3_assign_reverts" =
+  test_tx_result
+    "contract C { uint x; function f() public view { x = 1; } }"
+    "0xA:0xC.f()"
+    false
+
+let%test "issue3_map_reverts" =
+  test_tx_result
+    "contract C { mapping (address => uint) m; function f(address a) public view { m[a] = 1; } }"
+    "0xA:0xC.f(\"0xA\")"
+    false
+
+let%test "issue3_send_reverts" =
+  test_tx_result
+    "contract C { function f() public view { msg.sender.transfer(1); } }"
+    "0xA:0xC.f()"
+    false
+
+let%test "issue3_local_assign_ok" =
+  test_tx_result
+    "contract C { uint x; function f() public view { uint y; y = 1; } }"
+    "0xA:0xC.f()"
+    true
+
+let%test "issue3_assign_shadowing_ok" =
+  test_tx_result
+    "contract C { uint x; function f() public view { uint x; x=3; } }"
+    "0xA:0xC.f()"
+    true
+
+let%test "issue3_nested_assign_reverts" =
+  test_tx_result
+    "contract C { uint x; function f() public { this.g(); } function g() public view { x = 1; } }"
+    "0xA:0xC.f()"
+    false
+
+(*shouldn't be possible*)
+let%test "issue3_nested_assign_with_non_view_reverts" =
+  test_tx_result
+    "contract C { uint x; function f() public view { this.g(); } function g() public { x = 1; } }"
+    "0xA:0xC.f()"
+    false
