@@ -6,11 +6,10 @@ open Utils
 (* 
   issue 3: view modifier semantics
   
-  since that in this version of tinysol view functions CAN
-  call other non view functions (as opposed to solidity), we need 
-  to track if the function that is altering the value originated
-  from a nested view function call, and thus unable to alter
-  state values (even if non View).
+  to solve the issue we will try to implement a STATICCALL like behaviour
+  for View functions.
+  in case the typechecker fails to catch a view function calling a non view,
+  we need to ensure that state variables don't change.
 
   to achieve the goal above we will use a stack that tracks the callstack.
   so an execution flow like this:
@@ -586,6 +585,7 @@ let faucet (a : addr) (n : int) (st : sysstate) : sysstate =
 (******************************************************************************)
 
 let exec_tx (n_steps : int) (tx: transaction) (st : sysstate) : (sysstate,string) result =
+  sc_stack := [];
   if tx.txvalue < 0 then
     Error ("trying to send a negative amount of tokens")
   else if not (exists_account st tx.txsender) then 
