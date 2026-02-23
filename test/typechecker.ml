@@ -578,3 +578,85 @@ let%test "test_typecheck_enum_6" = test_typecheck
   "contract C { enum E1 {A1,B1} enum E2 {A2,B2} enum E1 {A1,B1} E1 s; function f() public { s = E1.A1; } }"
   false
 
+(*issue 12*)
+
+let%test "test_typecheck_issue12_ok" = test_typecheck
+"contract C {
+    int x;
+    bool b;
+
+    function f() public view returns (int,bool) { return(x,b); }
+
+    function g() public {
+        int w;
+        bool z;
+        (w,z) = this.f();
+        x += w;
+        b = !z;
+    }
+}"
+true
+
+let%test "test_typecheck_issue12_decons_arity_mismatch" = test_typecheck
+"contract C {
+    int x;
+    bool b;
+
+    function f() public view returns (int,bool) { return(x,b); }
+
+    function g() public {
+        int w;
+        int y;
+        bool z;
+        (w,y,z) = this.f();
+    }
+}"
+false
+
+let%test "test_typecheck_issue12_decons_type_mismatch" = test_typecheck
+"contract C {
+    int x;
+    bool b;
+
+    function f() public view returns (int,bool) { return(x,b); }
+
+    function g() public {
+        bool y;
+        bool z;
+        (y,z) = this.f();
+    }
+}"
+false
+
+let%test "test_typecheck_issue12_return_arity_mismatch" = test_typecheck
+"contract C {
+    int x;
+    bool b;
+
+    function f() public view returns (int,bool) { return(x); }
+}"
+false
+
+let%test "test_typecheck_issue12_return_type_mismatch" = test_typecheck
+"contract C {
+    int x;
+    bool b;
+
+    function f() public view returns (int,bool) { return(b,x); }
+}"
+false
+
+let%test "test_typecheck_issue12_hole_ok" = test_typecheck
+"contract C {
+    int x;
+    bool b;
+
+    function f() public view returns (int,bool) { return(x,b); }
+
+    function g() public {
+        bool z;
+        (,z) = this.f();
+        b = z;
+    }
+}"
+true
