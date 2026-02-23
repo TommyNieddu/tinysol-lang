@@ -427,7 +427,7 @@ let rec resolve_unknown_cmd enums = function
   | Skip          -> Skip
   | Decl _        -> assert(false) (* should not happen after blockify *)
   | Assign(x,e)   -> Assign(x,resolve_unknown_expr enums e)
-  | Decons(_)     -> failwith "TODO: multiple return values"
+  | Decons(xl,e)  -> Decons(xl, resolve_unknown_expr enums e)
   | MapW(x,ek,ev) -> MapW(x,resolve_unknown_expr enums ek,resolve_unknown_expr enums ev)
   | Seq(c1,c2)    -> Seq(resolve_unknown_cmd enums c1,resolve_unknown_cmd enums c2)
   | If(e,c1,c2)   -> If(resolve_unknown_expr enums e,resolve_unknown_cmd enums c1,resolve_unknown_cmd enums c2)
@@ -451,4 +451,4 @@ let resolve_unknown_contract (Contract(c,enums,vdl,fdl)) =
 (*                                  Preprocess contract                       *)
 (******************************************************************************)
 
-let preprocess_contract c = c |> blockify_contract |> resolve_unknown_contract 
+let preprocess_contract c = c |> blockify_contract |> resolve_unknown_contract
