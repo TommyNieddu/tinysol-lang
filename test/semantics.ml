@@ -502,7 +502,7 @@ let%test "test_proc_9" = test_exec_fun
       function wd(uint amt) public { c.g(amt); } 
   }"
   ["0xA:0xD.dp(10)"; "0xA:0xD.wd(5)"] 
-  [("0xC","this.balance==5"); ("0xD","this.balance==95")]
+  [("0xC","this.balance==10"); ("0xD","this.balance==90")]
 
 let%test "test_fun_1" = test_exec_fun
   "contract C { function f() public returns(int) { return(1); } }"
