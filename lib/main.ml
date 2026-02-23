@@ -356,12 +356,17 @@ and step_cmd = function
         (*
           issue 7: the receive() function must be called upon transfers
 
-          added an if branch that checks if an account with the ercv address exist
-          and if it contains a function "receive". If it does, instead of returning St
-          and terminating we execute the ProcCall rule for the function "receive"
+          check if the account exists && if it's a contract
+            if it is, check if it contains a function "receive"
+              if it does, return CmdSt(ProcCall(...)) to execute the body of "receive"    
+            if it doesn't, Revert the transaction (fallback() not implemented) 
+          if the account isn't a contract, treat it as an EOA, create it if it doesn't exists and update the state
         *)
-        if exists_account st rcv && (find_fun_in_sysstate st rcv "receive")<>None then
-          CmdSt ( ProcCall (ercv, "receive", eamt, []), st)
+        if exists_account st rcv && (st.accounts rcv).code<>None then
+          if find_fun_in_sysstate st rcv "receive"<>None then
+            CmdSt ( ProcCall (ercv, "receive", eamt, []), st)
+          else
+            Reverted "transfer failed: missing receive()"
         else if exists_account st rcv then
           let rcv_state = { (st.accounts rcv) with balance = (st.accounts rcv).balance + amt } in
            St { st with accounts = st.accounts |> bind rcv rcv_state |> bind from from_state}
