@@ -3,6 +3,51 @@ open Sysstate
 open Utils
 
 
+(* 
+  issue 3: view modifier semantics
+  
+  to solve the issue we will try to implement a STATICCALL like behaviour
+  for View functions.
+  in case the typechecker fails to catch a view function calling a non view,
+  we need to ensure that state variables don't change.
+
+  to achieve the goal above we will use a stack that tracks the callstack.
+  so an execution flow like this:
+    view f() -> g() -> h() 
+  with h() altering a state variable, will show up in our stack like this:
+    true -> true -> true
+  instead of
+    true -> false -> false
+  nested function originating from a view function call will inherit the staticcall status.
+ *)
+
+(* staticcall stack: tracks the write permissions of the current frame in callstack of sysstate*)
+let sc_stack : bool list ref = ref []
+let sc_curr () =
+  match !sc_stack with
+  | true :: _ -> true
+  | _ -> false
+
+let sc_push (b:bool) = sc_stack := b :: !sc_stack
+let sc_pop () =
+  match !sc_stack with
+  | _ :: tl -> sc_stack := tl
+  | [] -> ()
+
+(*helper to extract the mutability of a function declaration*)
+let is_view = function
+  | Proc(_,_,_,_,m,_) | Constr(_,_,m) -> 
+    match m with
+    | View -> true
+    | _ -> false
+
+(* helper to distinguish between local and state variables*)
+let is_state x st : bool =
+  match (lookup_locals x (List.hd st.callstack).locals) with
+  | Some _ -> false
+  | None -> true
+
+
 (******************************************************************************)
 (*                      Small-step semantics of expressions                   *)
 (******************************************************************************)
@@ -249,6 +294,9 @@ let rec step_expr (e,st) = match e with
     let to_state  = 
       { (st.accounts txto) with balance = (st.accounts txto).balance + txvalue } in 
     let fdecl = Option.get (find_fun_in_sysstate st txto f) in  
+
+    
+    if (is_view fdecl || sc_curr ()) then sc_push true else sc_push false;
     (* setup new callstack frame *)
     let xl = get_var_decls_from_fun fdecl in
     let xl',vl' =
@@ -280,9 +328,9 @@ let rec step_expr (e,st) = match e with
     (FunCall(e_to',f,e_value,e_args), st')
 
   | ExecFunCall(c) -> (match step_cmd (CmdSt(c,st)) with
-    | St _ -> failwith "function terminated without return"
-    | Reverted s -> failwith s
-    | Returned vl -> (match vl with
+    | St _ -> sc_pop (); failwith "function terminated without return"
+    | Reverted s -> sc_pop (); failwith s
+    | Returned vl -> sc_pop (); (match vl with
       | [v] -> (expr_of_exprval v, pop_callstack st)
       | _ -> failwith "multiple return values not supported"
     )
@@ -316,7 +364,10 @@ and step_cmd = function
     | Skip -> St st
 
     | Assign(x,e) when is_val e -> 
-        St (update_var st x (exprval_of_expr_typechecked e (type_of_var x st)))
+        if sc_curr () && is_state x st then
+          Reverted "View function can't update state variable"
+        else
+          St (update_var st x (exprval_of_expr_typechecked e (type_of_var x st)))
         
     | Assign(x,e) -> 
       let (e', st') = step_expr (e, st) in CmdSt(Assign(x,e'), st')
@@ -324,7 +375,10 @@ and step_cmd = function
     | Decons(_) -> failwith "TODO: multiple return values"
 
     | MapW(x,ek,ev) when is_val ek && is_val ev ->
-        St (update_map st x (exprval_of_expr ek) (exprval_of_expr ev))
+        if sc_curr () && is_state x st then
+          Reverted "View function can't update state variable"
+        else
+          St (update_map st x (exprval_of_expr ek) (exprval_of_expr ev))
     | MapW(x,ek,ev) when is_val ek -> 
       let (ev', st') = step_expr (ev, st) in 
       CmdSt(MapW(x,ek,ev'), st')
@@ -347,18 +401,21 @@ and step_cmd = function
         CmdSt(If(e',c1,c2), st')
 
     | Send(ercv,eamt) when is_val ercv && is_val eamt -> 
-        let rcv = addr_of_expr ercv in 
-        let amt = int_of_expr eamt in
-        let from = (List.hd st.callstack).callee in 
-        let from_bal = (st.accounts from).balance in
-        if from_bal<amt then Reverted "insufficient balance" else
-        let from_state =  { (st.accounts from) with balance = from_bal - amt } in
-        if exists_account st rcv then
-          let rcv_state = { (st.accounts rcv) with balance = (st.accounts rcv).balance + amt } in
-           St { st with accounts = st.accounts |> bind rcv rcv_state |> bind from from_state}
+        if sc_curr () then
+          Reverted "View function can't update state variable"
         else
-          let rcv_state = { balance = amt; storage = botenv; code = None; } in
-          St { st with accounts = st.accounts |> bind rcv rcv_state |> bind from from_state; active = rcv::st.active }
+          let rcv = addr_of_expr ercv in 
+          let amt = int_of_expr eamt in
+          let from = (List.hd st.callstack).callee in 
+          let from_bal = (st.accounts from).balance in
+          if from_bal<amt then Reverted "insufficient balance" else
+          let from_state =  { (st.accounts from) with balance = from_bal - amt } in
+          if exists_account st rcv then
+            let rcv_state = { (st.accounts rcv) with balance = (st.accounts rcv).balance + amt } in
+             St { st with accounts = st.accounts |> bind rcv rcv_state |> bind from from_state}
+          else
+            let rcv_state = { balance = amt; storage = botenv; code = None; } in
+            St { st with accounts = st.accounts |> bind rcv rcv_state |> bind from from_state; active = rcv::st.active }
 
     | Send(ercv,eamt) when is_val ercv -> 
         let (eamt', st') = step_expr (eamt, st) in
@@ -417,6 +474,8 @@ and step_cmd = function
         let to_state  = 
           { (st.accounts txto) with balance = (st.accounts txto).balance + txvalue } in 
         let fdecl = Option.get (find_fun_in_sysstate st txto f) in  
+
+        if (is_view fdecl || sc_curr ()) then sc_push true else sc_push false;
         (* setup new stack frame TODO *)
         let xl = get_var_decls_from_fun fdecl in
         let xl',vl' =
@@ -448,9 +507,9 @@ and step_cmd = function
       CmdSt(ProcCall(e_to',f,e_value,e_args), st')
 
     | ExecProcCall(c) -> (match step_cmd (CmdSt(c,st)) with
-      | St st -> St (pop_callstack st)
-      | Reverted s -> Reverted s
-      | Returned _ -> St (pop_callstack st)
+      | St st -> sc_pop (); St (pop_callstack st)
+      | Reverted s -> sc_pop (); Reverted s
+      | Returned _ -> sc_pop (); St (pop_callstack st)
       | CmdSt(c1',st1) -> CmdSt(ExecProcCall(c1'),st1))
   )
 
@@ -526,6 +585,7 @@ let faucet (a : addr) (n : int) (st : sysstate) : sysstate =
 (******************************************************************************)
 
 let exec_tx (n_steps : int) (tx: transaction) (st : sysstate) : (sysstate,string) result =
+  sc_stack := [];
   if tx.txvalue < 0 then
     Error ("trying to send a negative amount of tokens")
   else if not (exists_account st tx.txsender) then 
@@ -595,12 +655,13 @@ let exec_tx (n_steps : int) (tx: transaction) (st : sysstate) : (sysstate,string
                       callstack = fr' :: st.callstack;
                       blocknum = st.blocknum;
                       active = if deploy then tx.txto :: st.active else st.active } in
+          if m = View then sc_push true else sc_push false;
           try (match exec_cmd n_steps c st' with
-            | St st'' -> Ok (st'' |> pop_callstack)
-            | Reverted msg -> Error msg  (* if the command reverts, the new state is st *)
-            | _ -> Ok st (* exec_tx: execution of command not terminated (not enough gas?) => revert *)
+            | St st'' -> sc_pop (); Ok (st'' |> pop_callstack)
+            | Reverted msg -> sc_pop (); Error msg  (* if the command reverts, the new state is st *)
+            | _ -> sc_pop (); Ok st (* exec_tx: execution of command not terminated (not enough gas?) => revert *)
           )
-          with _ as ex -> Error (Printexc.to_string ex) (* exception thrown during execution of command => revert *)
+          with _ as ex -> sc_pop (); Error (Printexc.to_string ex) (* exception thrown during execution of command => revert *)
     ) (* match *)
   ) (* try *)
   with _ as ex -> Error (Printexc.to_string ex) 
