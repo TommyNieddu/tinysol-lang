@@ -410,9 +410,23 @@ and step_cmd = function
           let from_bal = (st.accounts from).balance in
           if from_bal<amt then Reverted "insufficient balance" else
           let from_state =  { (st.accounts from) with balance = from_bal - amt } in
-          if exists_account st rcv then
+          (*
+            issue 7: the receive() function must be called upon transfers
+
+            check if the account exists && if it's a contract
+              if it is, check if it contains a function "receive"
+                if it does, return CmdSt(ProcCall(...)) to execute the body of "receive"    
+              if it doesn't, Revert the transaction (fallback() not implemented) 
+            if the account isn't a contract, treat it as an EOA, create it if it doesn't exists and update the state
+          *)
+          if exists_account st rcv && (st.accounts rcv).code<>None then
+            if find_fun_in_sysstate st rcv "receive"<>None then
+              CmdSt ( ProcCall (ercv, "receive", eamt, []), st)
+            else
+              Reverted "transfer failed: missing receive()"
+          else if exists_account st rcv then
             let rcv_state = { (st.accounts rcv) with balance = (st.accounts rcv).balance + amt } in
-             St { st with accounts = st.accounts |> bind rcv rcv_state |> bind from from_state}
+            St { st with accounts = st.accounts |> bind rcv rcv_state |> bind from from_state}
           else
             let rcv_state = { balance = amt; storage = botenv; code = None; } in
             St { st with accounts = st.accounts |> bind rcv rcv_state |> bind from from_state; active = rcv::st.active }

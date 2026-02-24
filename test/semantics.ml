@@ -502,7 +502,7 @@ let%test "test_proc_9" = test_exec_fun
       function wd(uint amt) public { c.g(amt); } 
   }"
   ["0xA:0xD.dp(10)"; "0xA:0xD.wd(5)"] 
-  [("0xC","this.balance==5"); ("0xD","this.balance==95")]
+  [("0xC","this.balance==10"); ("0xD","this.balance==90")]
 
 let%test "test_fun_1" = test_exec_fun
   "contract C { function f() public returns(int) { return(1); } }"
@@ -696,7 +696,6 @@ let%test "test_fun_20" = test_exec_fun
   ["0xA:0xD.g()"] 
   [("0xC","this.balance==100"); ("0xD","this.balance==0")]
 
-
 (*issue 3 tests*)
 let test_tx_result (src: string) (tx: string) (expect_ok: bool) : bool =
   let tx = parse_transaction tx in
@@ -750,3 +749,48 @@ let%test "issue3_nested_assign_with_non_view_reverts" =
     "contract C { uint x; function f() public view { this.g(); } function g() public { x = 1; } }"
     "0xA:0xC.f()"
     false
+
+(* issue 7 tests *)
+let%test "test_issue7_transfer_ok" = test_exec_fun
+  "contract C {
+      uint x;
+      receive() external payable { x = 5; }
+  }"
+  "contract D {
+      constructor() payable { }
+      function f(address a) public { payable(a).transfer(1); }
+  }"
+  ["0xA:0xD.f(\"0xC\")"]
+  [("0xC","this.balance==1 && x==5"); ("0xD","this.balance==99")]
+
+let%test "test_issue7_transfer_reverts" = test_exec_fun
+  "contract C {
+      uint x;
+      function g() public { x = 7; }
+  }"
+  "contract D {
+      constructor() payable { }
+      function f(address a) public { payable(a).transfer(1); }
+  }"
+  ["0xA:0xD.f(\"0xC\")"]
+  [("0xC","this.balance==0"); ("0xD","this.balance==100")]
+
+let%test "test_issue7_receive_revert" = test_exec_fun
+  "contract C {
+      receive() external payable { require(false); }
+  }"
+  "contract D {
+      constructor() payable { }
+      function f(address a) public { payable(a).transfer(1); }
+  }"
+  ["0xA:0xD.f(\"0xC\")"]
+  [("0xC","this.balance==0"); ("0xD","this.balance==100")]
+
+let%test "test_issue7_transfer_to_eoa_ok" = test_exec_fun
+  "contract C { }"
+  "contract D {
+      constructor() payable { }
+      function f() public { payable(\"0xB\").transfer(1); }
+  }"
+  ["0xA:0xD.f()"]
+  [("0xB","this.balance==101"); ("0xD","this.balance==99")]
