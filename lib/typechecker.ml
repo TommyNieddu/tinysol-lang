@@ -16,6 +16,7 @@ type exprtype =
   | EnumET of ide
   | ContractET of ide
   | MapET of exprtype * exprtype
+  | TupleET of exprtype list
 
 let rec string_of_exprtype = function
   | BoolConstET b   -> "bool " ^ (if b then "true" else "false")
@@ -27,6 +28,7 @@ let rec string_of_exprtype = function
   | EnumET x        -> x
   | ContractET x    -> x
   | MapET(t1,t2)    -> string_of_exprtype t1 ^ " => " ^ string_of_exprtype t2
+  | TupleET(ts)     -> "(" ^ (String.concat "," (List.map string_of_exprtype ts)) ^ ")"
 
 (* the result of the contract typechecker is either:
   - Ok():       if all static checks passed
@@ -184,6 +186,24 @@ let subtype t0 t1 = match t1 with
   | IntET -> (match t0 with IntConstET _ | IntET -> true | _ -> false) (* uint is not convertible to int *)
   | AddrET _ -> (match t0 with AddrET _ -> true | _ -> false)
   | _ -> t0 = t1
+
+(*current function declaration list*)
+let current_fdl : fun_decl list ref = ref []
+
+
+let find_proc (name:ide) : fun_decl option =
+  List.find_opt (function Proc(f,_,_,_,_,_) when f=name -> true | _ -> false) !current_fdl
+
+(*returns the returns types of a function*)
+let ret_type_of_fun (name:ide) : exprtype option =
+  match find_proc name with
+  | Some (Proc(_,_,_,_,_,rets)) ->
+      let ts = List.map exprtype_of_decltype rets in
+      (match ts with 
+      | [] -> None              (*function doesn't return*)
+      | [t] -> Some t           (*function returns a single type*)
+      | _ -> Some (TupleET ts)) (*function returns multiple types*)
+  | _ -> None   (*function not found*) 
 
 let rec typecheck_expr (f : ide) (edl : enum_decl list) vdl = function
   | BoolConst b -> Ok (BoolConstET b)
@@ -378,7 +398,10 @@ let rec typecheck_expr (f : ide) (edl : enum_decl list) vdl = function
       | err -> err)
 
   | UnknownCast(_) -> assert(false) (* should not happen after preprocessing *)
-  | FunCall(_) -> failwith "TODO: FunCall"
+  | FunCall(_,fname,_,_) ->
+      (match ret_type_of_fun fname with
+      | Some t -> Ok t
+      | None -> Error [Failure ("(" ^ f ^ ")\t function " ^ fname ^ " not declared")])
 
   | ExecFunCall(_) -> assert(false) (* this should not happen at static time *)
 
@@ -404,7 +427,30 @@ let rec typecheck_cmd (f : ide) (edl : enum_decl list) (vdl : all_var_decls) = f
           | res1,res2 -> typeckeck_result_from_expr_result (res1 >>+ res2)
         )
 
-    | Decons(_) -> failwith "TODO: multiple return values"
+    | Decons(xl, e) ->
+        (*return types of rhs expr*)
+        (match typecheck_expr f edl vdl e with
+        | Error err -> Error err
+        | Ok (TupleET ts) ->
+            (*arity check: lhs number of vars must match rhs number of return values*)
+            if List.length xl <> List.length ts then
+              Error [Failure (logfun f " arity mismatch")]
+            else
+              let check_slot xid t_i =
+                match xid with
+                | None -> Ok ()   (*e.g. (,x) <- first slot type is ignored*)
+                | Some x ->       
+                    (*same immutability check as in Assign*)
+                    if f <> "constructor" && is_immutable x (get_state_var_decls vdl) then Error [ImmutabilityError (f,x)]
+                    else
+                      (*type of lhs x slot*)
+                      match typecheck_expr f edl vdl (Var x) with
+                      | Ok tx when subtype t_i tx -> Ok ()      (*type is assignable to x*)
+                      | Ok tx -> Error [TypeError (f,e,t_i,tx)]
+                      | Error log -> Error log
+              in
+              List.fold_left2 (fun acc xid t_i -> acc >> check_slot xid t_i) (Ok ()) xl ts
+        | Ok _ -> Error [Failure (logfun f " multi-return call expected")])
 
     | MapW(x,ek,ev) ->  
         (match typecheck_expr f edl vdl (Var x),
@@ -461,7 +507,24 @@ let rec typecheck_cmd (f : ide) (edl : enum_decl list) (vdl : all_var_decls) = f
 
     | ExecProcCall(_) -> assert(false) (* should not happen at static time *)
 
-    | Return(_) -> failwith "TODO: Return"
+    | Return(el) -> 
+        let expected =
+          match find_proc f with
+          | Some (Proc(_,_,_,_,_,rets)) -> List.map exprtype_of_decltype rets
+          | _ -> []
+        in
+        (*arity check: number of returned expr must match the signature*)
+        if List.length el <> List.length expected then
+          Error [Failure (logfun f " return arity mismatch")]
+        else
+          (*typecheck each pair e_i t_i where t_i is the i-th declared return type*)
+          let check_slot e_i t_exp =
+            match typecheck_expr f edl vdl e_i with
+            | Ok t_i when subtype t_i t_exp -> Ok ()
+            | Ok t_i -> Error [TypeError (f, e_i, t_i, t_exp)]
+            | Error log -> Error log
+          in
+          List.fold_left2 (fun acc e_i t_exp -> acc >> check_slot e_i t_exp) (Ok ()) el expected
 
 
 let typecheck_fun (edl : enum_decl list) (vdl : var_decl list) = function
@@ -501,6 +564,8 @@ let typecheck_enums (edl : enum_decl list) =
  *)
 
 let typecheck_contract (Contract(_,edl,vdl,fdl)) : typecheck_result =
+  (*setting global ref to fdl*)
+  current_fdl := fdl;
   (* no multiply declared enums *)
   typecheck_enums edl 
   >>
